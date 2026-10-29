@@ -16,6 +16,8 @@ from langcheck.taxonomy.kinds import ErrorKind
 def sentence(
     score: Score, seconds: float, *outcomes: SuggestionOutcome, unchecked: bool = False
 ) -> SentenceResult:
+    # The second option of the first sentence's suggestion would have been right.
+    best_of_two = Counts(tp=score.overall.tp + score.overall.fp, fn=score.overall.fn)
     return SentenceResult(
         score=score,
         seconds=seconds,
@@ -23,6 +25,7 @@ def sentence(
         rejections=Counter({RejectionReason.NOT_FOUND: 1}),
         unchecked=unchecked,
         filtered=1,
+        top_n=(score.overall, best_of_two, best_of_two, best_of_two),
     )
 
 
@@ -57,6 +60,23 @@ def test_build_report_sums_sentences_and_keeps_outcomes() -> None:
         (ErrorKind.SPELLING, 2.0, Effect.CORRECT)
     ]
     assert report.kind_counts()["Determiner"] == Counts(fn=1)
+    assert [(row.kind, row.tp, row.fp, row.fn) for row in report.top_n] == [
+        ("top-1", 1, 1, 1),
+        ("top-2", 2, 0, 1),
+        ("top-3", 2, 0, 1),
+        ("top-4", 2, 0, 1),
+    ]
+
+
+def test_runs_without_top_n_scores_report_none() -> None:
+    run = RunResult(
+        (*RUN.sentences, SentenceResult(Score(), 1.0, (), Counter(), unchecked=False, filtered=0))
+    )
+
+    report = build_report(run, dataset="d", model="m", prompt_version="p", scorer="s")
+
+    assert report.top_n == []
+    assert "best of the first n options" not in render_report(report)
 
 
 def test_reports_round_trip_through_json() -> None:
@@ -70,7 +90,11 @@ def test_render_report_lists_kinds_then_overall() -> None:
 
     assert text.splitlines()[0].startswith("conll14-test: 2 sentences, model qwen3:8b")
     assert "Spelling" in text
-    assert "overall" in text.splitlines()[-3]
+    lines = text.splitlines()
+    assert lines[-8].startswith("overall")
+    assert lines[-7] == "best of the first n options:"
+    assert lines[-6].startswith("top-1")
+    assert lines[-3].startswith("top-4")
     assert "rejected: not_found 2; unchecked: 1; filtered: 2" in text
     assert "p90 3.0" in text
 

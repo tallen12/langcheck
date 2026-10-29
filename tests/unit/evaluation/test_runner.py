@@ -23,7 +23,12 @@ FINE = Example(("All", "fine", "."), ((),))
 
 
 def suggestion(
-    text: str, original: str, replacement: str, kind: ErrorKind, delta: float | None
+    text: str,
+    original: str,
+    replacement: str,
+    kind: ErrorKind,
+    delta: float | None,
+    *others: str,
 ) -> Suggestion:
     start = text.index(original)
     span = Span(start, start + len(original))
@@ -35,12 +40,14 @@ def suggestion(
         kind=kind,
         operation=Operation.REPLACEMENT,
         explanation="",
-        options=(Option(replacement, rating),),
+        options=(Option(replacement, rating), *(Option(other) for other in others)),
     )
 
 
 class ScriptedChecker:
-    """Fixes "go" and "teh" (wrongly, as "a"), flags "fine", records calls."""
+    """Fixes "go" and "teh" (wrongly, as "a"; "the" is its third option), flags "fine",
+    records calls.
+    """
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, DocumentContext]] = []
@@ -58,7 +65,7 @@ class ScriptedChecker:
             return CheckResult(
                 (
                     suggestion(text, "go", "goes", ErrorKind.SUBJECT_VERB_AGREEMENT, 2.0),
-                    suggestion(text, "teh", "a", ErrorKind.SPELLING, None),
+                    suggestion(text, "teh", "a", ErrorKind.SPELLING, None, "tea", "the"),
                 ),
                 (),
                 (
@@ -85,7 +92,14 @@ def test_evaluate_scores_sentences_and_suggestions() -> None:
     run = asyncio.run(evaluate([GO, FINE], checker, TokenDiffAnnotator(), concurrency=2))
 
     assert run.score.overall == Counts(tp=1, fp=2, fn=1)
+    assert run.top_n == (
+        Counts(tp=1, fp=2, fn=1),
+        Counts(tp=1, fp=2, fn=1),
+        Counts(tp=2, fp=1, fn=0),
+        Counts(tp=2, fp=1, fn=0),
+    )
     go, fine = run.sentences
+    assert go.top_n[0] == go.score.overall
     assert [(o.kind, o.delta, o.effect) for o in go.outcomes] == [
         (ErrorKind.SUBJECT_VERB_AGREEMENT, 2.0, Effect.CORRECT),
         (ErrorKind.SPELLING, None, Effect.WRONG),

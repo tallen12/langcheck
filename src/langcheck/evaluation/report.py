@@ -97,6 +97,10 @@ class Report(BaseModel):
     filtered: int
     latency: Latency
     outcomes: Annotated[list[Outcome], Field(default_factory=list)]
+    top_n: Annotated[list[KindScore], Field(default_factory=list)]
+    """Overall scores when each suggestion takes the best of its first n options, as
+    rows named ``top-1`` to ``top-4``. Empty in reports made before they were kept.
+    """
 
     def kind_counts(self) -> dict[str, Counts]:
         """Counts per kind name, including ``other``."""
@@ -129,6 +133,7 @@ def build_report(
             for s in run.sentences
             for o in s.outcomes
         ],
+        top_n=[KindScore.of(f"top-{n}", counts) for n, counts in enumerate(run.top_n, start=1)],
     )
 
 
@@ -136,6 +141,8 @@ def render_report(report: Report) -> str:
     """A plain-text table: one row per kind, then rejections and latency."""
     header = f"{'kind':<22} {'TP':>5} {'FP':>5} {'FN':>5} {'P':>6} {'R':>6} {'F0.5':>6}"
     rows = [_row(row) for row in [*report.kinds, report.overall]]
+    if report.top_n:
+        rows += ["best of the first n options:", *(_row(row) for row in report.top_n)]
     rejected = ", ".join(f"{reason} {count}" for reason, count in report.rejections.items())
     latency = report.latency
     return "\n".join(

@@ -585,6 +585,11 @@ needs 20 scored suggestions before it is tuned (`--min-suggestions`); on 200 CoN
 sentences, smaller kinds "gained" up to 0.3 F0.5 from noise. The comparison with contcheck's tagger
 needs contcheck's own run on the same sets and is not part of this command.
 
+Reports also give top-n scores for n = 1 to 4: each suggestion takes whichever of its
+first n options scores best against the gold edits. Top-1 is the normal score; the rise
+from top-1 to top-4 bounds what better option ranking could gain, since the right fix
+was among the LLM's options but not ranked first.
+
 Results (qwen3:8b through Ollama with reasoning off, prompt check-v1, PLL with
 distilroberta-base):
 
