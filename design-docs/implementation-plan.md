@@ -259,7 +259,10 @@ All endpoints except `/health` require authentication. `{uri}` is URL-encoded.
   issue is not suggested again in this session.
 - `GET`, `POST`, `DELETE /documents/{uri}/dictionary`: list, add and remove words.
 - `POST /check`: stateless one-shot check of a text (with an optional URI to use its
-  dictionary), for the CLI and simple clients.
+  dictionary), for the CLI and simple clients. Without a context in the request, the server builds one
+  first and returns it with the suggestions.
+- `POST /context`: the document context of a text, for `langcheck context` and prompt
+  tuning.
 - `GET /health`.
 
 ### Dictionary
