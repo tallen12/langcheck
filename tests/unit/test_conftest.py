@@ -79,7 +79,11 @@ def test_tiny_tokenizer_has_roberta_special_tokens_and_offsets(
     tiny_tokenizer: PreTrainedTokenizerFast,
 ) -> None:
     encoded = tiny_tokenizer("The dog sleeps.", return_offsets_mapping=True)
+    truncated = tiny_tokenizer("The dog sleeps in the garden.", truncation=True, max_length=4)
 
     assert tiny_tokenizer.mask_token_id is not None
     assert tiny_tokenizer.pad_token_id is not None
-    assert len(encoded["input_ids"]) == len(encoded["offset_mapping"])
+    assert encoded["input_ids"][0] == tiny_tokenizer.cls_token_id
+    assert encoded["input_ids"][-1] == tiny_tokenizer.sep_token_id
+    assert encoded["offset_mapping"][0] == (0, 0)
+    assert len(truncated["input_ids"]) == 4

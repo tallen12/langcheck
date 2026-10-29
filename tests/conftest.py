@@ -119,16 +119,25 @@ TINY_CORPUS = [
 @pytest.fixture(scope="session")
 def tiny_tokenizer() -> PreTrainedTokenizerFast:
     """A RoBERTa-style byte-level BPE tokenizer trained on a few sentences, so scorer
-    tests run without downloading a model.
+    tests run without downloading a model. Like RoBERTa it wraps text in ``<s> ... </s>``.
     """
-    from tokenizers import ByteLevelBPETokenizer
+    # Only scorer tests need these, so they load with the fixture.
+    from tokenizers import Tokenizer, decoders, models, pre_tokenizers, processors, trainers
 
-    bpe = ByteLevelBPETokenizer()
-    bpe.train_from_iterator(
-        TINY_CORPUS,
+    special = ["<s>", "<pad>", "</s>", "<unk>", "<mask>"]
+    bpe = Tokenizer(models.BPE(unk_token="<unk>"))
+    bpe.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    bpe.decoder = decoders.ByteLevel()
+    trainer = trainers.BpeTrainer(
         vocab_size=600,
         min_frequency=1,
-        special_tokens=["<s>", "<pad>", "</s>", "<unk>", "<mask>"],
+        special_tokens=special,
+        initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
+    )
+    bpe.train_from_iterator(TINY_CORPUS, trainer)
+    # The trainer gives special tokens the first ids, in order.
+    bpe.post_processor = processors.RobertaProcessing(
+        ("</s>", special.index("</s>")), ("<s>", special.index("<s>"))
     )
     return PreTrainedTokenizerFast(
         tokenizer_object=bpe,
