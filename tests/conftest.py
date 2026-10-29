@@ -1,5 +1,6 @@
 """Fixtures shared across test types."""
 
+import difflib
 import sys
 import types
 from collections.abc import Callable, Iterator, Sequence
@@ -8,8 +9,11 @@ import pytest
 from transformers import PreTrainedTokenizerFast
 
 from langcheck.auth.models import User, UserExistsError
+from langcheck.evaluation.m2 import GoldEdit
+from langcheck.evaluation.models import ScoredEdit
 from langcheck.llm.models import ChatMessage, ChatOptions, LLMError
 from langcheck.scoring.models import ScoredText
+from langcheck.taxonomy.kinds import ErrorKind
 
 type Responder = Callable[[Sequence[ChatMessage]], str | LLMError]
 
@@ -225,3 +229,42 @@ def fake_uno(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.delitem(sys.modules, "langcheck.libreoffice.component", raising=False)
     yield
     sys.modules.pop("langcheck.libreoffice.component", None)
+
+
+class TokenDiffAnnotator:
+    """An ``EditAnnotator`` fake: splits on whitespace and diffs tokens with difflib.
+
+    Edits get the kind passed in (``None`` by default), so scoring tests do not need
+    spaCy or ERRANT.
+    """
+
+    def __init__(self, kind: ErrorKind | None = None) -> None:
+        self.kind = kind
+
+    def system_edits(self, source: Sequence[str], corrected: str) -> list[ScoredEdit]:
+        """Edits from ``source`` to the whitespace tokens of ``corrected``."""
+        return self._diff(source, corrected.split())
+
+    def reference_edits(self, source: Sequence[str], reference: Sequence[str]) -> list[ScoredEdit]:
+        """Edits from ``source`` to ``reference``."""
+        return self._diff(source, reference)
+
+    def gold_edits(self, source: Sequence[str], edits: Sequence[GoldEdit]) -> list[ScoredEdit]:
+        """The M2 edits with this fake's kind."""
+        return [ScoredEdit(e.start, e.end, e.correction, self.kind) for e in edits]
+
+    def _diff(self, source: Sequence[str], target: Sequence[str]) -> list[ScoredEdit]:
+        matcher = difflib.SequenceMatcher(a=list(source), b=list(target), autojunk=False)
+        edits: list[ScoredEdit] = []
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                continue
+            if tag == "replace" and i2 - i1 == j2 - j1:
+                # Word-for-word replacements are separate edits, as ERRANT splits them.
+                edits += [
+                    ScoredEdit(i1 + k, i1 + k + 1, (target[j1 + k],), self.kind)
+                    for k in range(i2 - i1)
+                ]
+            else:
+                edits.append(ScoredEdit(i1, i2, tuple(target[j1:j2]), self.kind))
+        return edits

@@ -404,6 +404,9 @@ it uses `llama3`. Every command takes `--config PATH`.
   service, the LSP proxy, and manage API keys.
 - `langcheck config show [--server]`: print the merged client (or server) settings with
   secrets masked.
+- `langcheck evaluate fetch|run|show|compare|tune`: fetch an annotated set, check it in
+  process and save a JSON report, print or compare reports, and choose the scoring
+  policy from a scored run (see M6).
 
 `check` and `watch` call the configured server. With `--local`, or when no server is
 configured, they run the same `Checker` in process against the LLM URL directly. The
@@ -562,6 +565,18 @@ over annotated sets (BEA-2019 dev, JFLEG, CoNLL-2014; contcheck already fetches 
 these) and scores it with ERRANT span-level F0.5, per kind. Use it to compare models and
 prompts, set `ScoringPolicy` per kind, measure how many LLM edits validation rejects,
 and record latency per chunk. Compare against contcheck's tagger on the same sets.
+
+As built: `langcheck evaluate fetch` downloads BEA-2019 dev, CoNLL-2014 test (M2) or
+JFLEG dev (references) once into `data/eval/`. `evaluate run` checks every sentence as
+its own text with an empty context (one chunk per check, so the timing is chunk
+latency), applies each suggestion's best option, extracts the edits with ERRANT
+(`eval` extra) and scores them against each sentence's best annotator, per kind through
+contcheck's ERRANT map. Its JSON report in `runs/` also holds rejections by reason and
+every suggestion's kind, best delta and correctness; `evaluate tune` uses those to pick a
+margin per kind and prints `scorer.policy` YAML, and `evaluate compare` sets two runs
+side by side. Correctness for tuning is per suggestion (all its edits are gold edits),
+an approximation of ERRANT's per-edit counts. The comparison with contcheck's tagger
+needs contcheck's own run on the same sets and is not part of this command.
 
 ## Features
 

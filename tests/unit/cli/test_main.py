@@ -14,6 +14,7 @@ from pygls.lsp.server import LanguageServer
 
 from langcheck.cli.environment import CliEnvironment
 from langcheck.cli.main import CLEAN, FAILED, FOUND, build_app, nested_overrides
+from tests.conftest import TokenDiffAnnotator
 
 CONTEXT = {
     "summary": "A note.",
@@ -96,6 +97,18 @@ class RecordingRunner:
         self.runs.append((app, host, port))
 
 
+class ServedArchive:
+    """A Downloader that writes a prepared archive."""
+
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+        self.urls: list[str] = []
+
+    def download(self, url: str, destination: Path) -> None:
+        self.urls.append(url)
+        destination.write_bytes(self.body)
+
+
 @dataclass
 class RecordingLanguageServers:
     """Records the language server it was asked to run."""
@@ -123,6 +136,7 @@ class Cli:
     tmp_path: Path
     network: Network = field(default_factory=Network)
     runner: RecordingRunner = field(default_factory=RecordingRunner)
+    downloader: ServedArchive = field(default_factory=lambda: ServedArchive(b""))
     language_servers: RecordingLanguageServers = field(
         default_factory=lambda: RecordingLanguageServers()
     )
@@ -130,8 +144,8 @@ class Cli:
     out: list[str] = field(default_factory=list)
     err: list[str] = field(default_factory=list)
 
-    def __call__(self, *argv: str) -> int:
-        env = CliEnvironment(
+    def environment(self) -> CliEnvironment:
+        return CliEnvironment(
             environ={},
             cwd=self.tmp_path,
             out=self.out.append,
@@ -139,10 +153,14 @@ class Cli:
             runner=self.runner,
             watcher=self.watcher,
             language_servers=self.language_servers,
+            downloader=self.downloader,
+            edit_annotators=TokenDiffAnnotator,
             clock=lambda: datetime(2026, 10, 28, tzinfo=UTC),
             transport=httpx.MockTransport(self.network),
         )
-        code = build_app(env)(list(argv))
+
+    def __call__(self, *argv: str) -> int:
+        code = build_app(self.environment())(list(argv))
         assert isinstance(code, int)
         return code
 
@@ -343,3 +361,80 @@ def test_lsp_runs_a_language_server_for_the_configured_server(cli: Cli) -> None:
     assert cli("lsp", "--server", "http://svc.test") == CLEAN
     [server] = cli.language_servers.servers
     assert server.name == "langcheck"
+
+
+CONLL_M2 = """S Read teh book .
+A 1 2|||R:SPELL|||the|||REQUIRED|||-NONE-|||0
+
+S All good here .
+"""
+
+
+def conll_archive() -> bytes:
+    import io
+    import tarfile
+
+    from langcheck.evaluation.datasets import SOURCES, Dataset
+
+    data = CONLL_M2.encode()
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        info = tarfile.TarInfo(SOURCES[Dataset.CONLL14_TEST].members[0])
+        info.size = len(data)
+        archive.addfile(info, io.BytesIO(data))
+    return buffer.getvalue()
+
+
+def test_evaluate_fetches_runs_shows_compares_and_tunes(cli: Cli, tmp_path: Path) -> None:
+    assert cli("evaluate", "run", "conll14-test") == FAILED
+    assert "evaluate fetch conll14-test" in cli.err[-1]
+
+    cli.downloader.body = conll_archive()
+    assert cli("evaluate", "fetch", "conll14-test") == CLEAN
+    assert "for research use" in cli.out[0]
+
+    cli.out.clear()
+    assert cli("evaluate", "run", "conll14-test", "--output", str(tmp_path / "a.json")) == CLEAN
+    assert "conll14-test: 2 sentences" in cli.output
+    report = json.loads((tmp_path / "a.json").read_text(encoding="utf-8"))
+    assert (report["overall"]["tp"], report["overall"]["fp"], report["overall"]["fn"]) == (1, 0, 0)
+    assert report["scorer"] == "llm-order"
+
+    cli.out.clear()
+    assert cli("evaluate", "show", str(tmp_path / "a.json")) == CLEAN
+    assert cli("evaluate", "compare", str(tmp_path / "a.json"), str(tmp_path / "a.json")) == CLEAN
+    assert "+0.000" in cli.output
+
+    assert cli("evaluate", "tune", str(tmp_path / "a.json")) == FAILED
+    assert "no scored suggestions" in cli.err[-1]
+
+
+def test_evaluate_tune_prints_the_policy(cli: Cli, tmp_path: Path) -> None:
+    from langcheck.evaluation.report import KindScore, Latency, Outcome, Report
+    from langcheck.evaluation.scoring import Counts
+    from langcheck.taxonomy.kinds import ErrorKind
+
+    report = Report(
+        dataset="conll14-test",
+        model="m",
+        prompt_version="check-v1",
+        scorer="pll",
+        sentences=5,
+        overall=KindScore.of("overall", Counts(2, 3, 1)),
+        kinds=[KindScore.of("Punctuation", Counts(2, 3, 1))],
+        rejections={},
+        unchecked=0,
+        filtered=0,
+        latency=Latency.of([1.0]),
+        outcomes=[
+            Outcome(kind=ErrorKind.PUNCTUATION, delta=d, correct=c)
+            for d, c in [(-1.0, False), (-0.5, False), (0.2, False), (1.0, True), (2.0, True)]
+        ],
+    )
+    path = tmp_path / "scored.json"
+    path.write_text(report.model_dump_json(), encoding="utf-8")
+
+    assert cli("evaluate", "tune", str(path)) == CLEAN
+
+    assert "Punctuation            filter above 0.2" in cli.output
+    assert cli.output.endswith("    Punctuation:\n      filter: true\n      margin: 0.2")

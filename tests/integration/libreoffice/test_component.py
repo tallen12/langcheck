@@ -202,9 +202,11 @@ def test_writer_gets_langcheck_suggestions(tmp_path: Path, service: tuple[str, S
 
     errors = json.loads(run.stdout.strip().splitlines()[-1])
     assert errors == [{"start": 5, "length": 3, "options": ["the"]}]
-    # LibreOffice may also check the empty document it starts with; the text arrives once.
-    sent = {(uri, text) for uri, text in stand_in.puts if text}
-    [(uri, text)] = sent
-    assert uri.startswith("untitled:")
-    assert text == TEXT
+    # Writer may send the empty starting document and intermediate versions while the
+    # text is inserted; all of them must be the same document, ending with the full text.
+    sent = [(uri, text) for uri, text in stand_in.puts if text]
+    uris = {uri for uri, _ in sent}
+    assert len(uris) == 1, sent
+    assert next(iter(uris)).startswith("untitled:")
+    assert TEXT in {text for _, text in sent}, sent
     assert stand_in.polls >= 1
