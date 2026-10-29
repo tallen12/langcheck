@@ -494,6 +494,29 @@ these) and scores it with ERRANT span-level F0.5, per kind. Use it to compare mo
 prompts, set `ScoringPolicy` per kind, measure how many LLM edits validation rejects,
 and record latency per chunk. Compare against contcheck's tagger on the same sets.
 
+## Features
+
+Each milestone is built as one or more features (see the `git-workflow` skill): one
+feature branch each, landing on `main` through one pull request. A feature should change
+at most about 5,000 lines, tests included, so its pull request stays reviewable. Tasks
+inside a feature run in their own worktrees and can run in parallel where they do not
+depend on each other.
+
+| Feature branch | Milestone | Scope | Tasks |
+| --- | --- | --- | --- |
+| `feat/core-types` | M1 | Pure types and text handling. | `taxonomy`; `text` segmentation with offsets; `check` reply and suggestion schemas, resolution, validation, operation derivation, applying an option |
+| `feat/llm-checker` | M2 | Checking in process, no service. | `llm` port (async and sync clients, fakes); prompt v1 and chunker; `DocumentContext` builder; `Checker` and the per-user result cache |
+| `feat/check-service` | M2 | Settings, service and CLI around the checker. | `settings` (YAML source, precedence); `auth` (`api_key`, `none`) with the SQL setup and `langcheck admin`; FastAPI app with `POST /check` and `/health`; CLI `check`, `context`, `serve`, `config show`; `llm` integration test |
+| `feat/scoring` | M3 | Ranking options. | `SentenceScorer` protocol and PLL adapter; CoLA adapter; ranker and `ScoringPolicy`; scorer thread and batching queue; PyTorch extras and `--no-score` |
+| `feat/document-sessions` | M4 | Stateful documents in the service. | `DocumentStore` and (user, URI) keys; paragraph and sentence diffing with offset shifting; debounce, cancellation and the document endpoints; accept, dismiss and SSE; per-user rate limits; `langcheck watch` |
+| `feat/dictionary` | M4 | Per-document dictionaries. | `DictionaryStore` memory and SQL; endpoints; `langcheck dict`; dictionary filtering in the checker |
+| `feat/vscode` | M4 | Editor client. | LSP proxy (`langcheck lsp`); TypeScript extension in `editors/vscode/`, `just vscode` and its CI job |
+| `feat/libreoffice` | M5 | LibreOffice client. | Spike; UNO proofreader; import-rule check; `just libreoffice` and its CI job |
+| `feat/evaluation` | M6 | Measuring and tuning. | `evaluate` command with ERRANT scoring; `ScoringPolicy` tuning; model and prompt comparison |
+
+A feature that grows past the limit while being built is split at a task boundary into a
+second feature that lands after it.
+
 ## Open questions
 
 - **Default LLM model.** Any OpenAI-compatible server works; which model to recommend is
