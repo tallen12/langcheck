@@ -12,6 +12,7 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, Literal
 
+import httpx
 import yaml
 from cyclopts import App, Parameter
 from pydantic import ValidationError
@@ -25,9 +26,12 @@ from langcheck.auth.sql_store import SqlApiKeyStore
 from langcheck.auth.tokens import add_user
 from langcheck.cli.checking import ContextUnavailableError, open_local, open_remote
 from langcheck.cli.environment import CliEnvironment, process_environment
+from langcheck.cli.evaluating import evaluate_app
 from langcheck.cli.render import render_check, render_context
 from langcheck.cli.watching import watch_file
 from langcheck.database.schema import open_database
+from langcheck.evaluation.datasets import DatasetError
+from langcheck.evaluation.m2 import M2Error
 from langcheck.llm.models import LLMError
 from langcheck.lsp.models import Diagnostic
 from langcheck.lsp.proxy import LspProxy
@@ -65,6 +69,9 @@ _EXPECTED_FAILURES = (
     LLMError,
     UserExistsError,
     ScorerUnavailableError,
+    DatasetError,
+    M2Error,
+    httpx.HTTPError,
     OSError,
 )
 
@@ -115,6 +122,8 @@ def build_app(env: CliEnvironment) -> App:
         except _EXPECTED_FAILURES as error:
             env.err(f"langcheck: {error}")
             return FAILED
+
+    app.command(evaluate_app(env, settings=client_settings, guarded=guarded))
 
     @app.command
     def check(
