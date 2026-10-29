@@ -65,7 +65,9 @@ def tune(
             KindDecision(
                 kind=kind,
                 filter=enabled,
-                margin=round(best_margin, 4) if enabled else 0.0,
+                # Unrounded: the margin is an observed delta, and the policy keeps only
+                # deltas above it, so rounding down would keep the suggestion it drops.
+                margin=best_margin if enabled else 0.0,
                 before=before,
                 after=best if enabled else before,
             )

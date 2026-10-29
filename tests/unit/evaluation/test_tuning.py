@@ -1,6 +1,7 @@
 from langcheck.evaluation.report import Outcome
 from langcheck.evaluation.scoring import Counts
 from langcheck.evaluation.tuning import KindDecision, policy_yaml, tune
+from langcheck.scoring.policy import KindPolicy, ScoringPolicy
 from langcheck.taxonomy.kinds import ErrorKind
 
 PUNCT = ErrorKind.PUNCTUATION
@@ -65,3 +66,15 @@ def test_the_yaml_loads_into_the_server_settings() -> None:
 
     policy = settings.scorer.scorer_config().policy.for_kind(PUNCT)
     assert (policy.filter, policy.margin) == (True, 0.2)
+
+
+def test_the_margin_drops_exactly_the_suggestions_tuning_measured() -> None:
+    # The wrong suggestion's delta has more decimals than a rounded margin would keep.
+    outcomes = [outcome(PUNCT, 0.12344, False), outcome(PUNCT, 0.5, True)]
+
+    [decision] = tune(outcomes, {"Punctuation": Counts(tp=1, fp=1, fn=0)})
+
+    policy = ScoringPolicy({PUNCT: KindPolicy(filter=decision.filter, margin=decision.margin)})
+    assert decision.filter
+    assert not policy.keeps(PUNCT, 0.12344)
+    assert policy.keeps(PUNCT, 0.5)
