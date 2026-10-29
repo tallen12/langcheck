@@ -9,11 +9,14 @@ from langcheck.auth.models import AuthResult, Unauthenticated, User
 from langcheck.check.checker import CheckResult, Unchecked
 from langcheck.check.suggestion import Option, Suggestion
 from langcheck.context.models import DocumentContext, Register
+from langcheck.documents.memory_store import MemoryDocumentStore
+from langcheck.documents.sessions import DocumentSessions
 from langcheck.limits.protocols import CheckLimiter
 from langcheck.limits.user_limiter import Unlimited, UserLimiter
 from langcheck.llm.structured import Failed
 from langcheck.taxonomy.kinds import ErrorKind, Operation
 from langcheck.text.models import Span
+from langcheck.text.regex_splitter import RegexSentenceSplitter
 
 CONTEXT = DocumentContext(
     summary="Notes.",
@@ -84,6 +87,13 @@ def client_for(
             checker=checker,
             contexts=contexts,
             limiter=limiter or Unlimited(),
+            documents=DocumentSessions(
+                MemoryDocumentStore(),
+                checker=checker,
+                contexts=contexts,
+                splitter=RegexSentenceSplitter(),
+                limiter=Unlimited(),
+            ),
         )
 
     return TestClient(build_app(services))

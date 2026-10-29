@@ -8,6 +8,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 
+from langcheck.api.documents import document_router
 from langcheck.api.schemas import (
     CheckRequest,
     CheckResponse,
@@ -20,6 +21,7 @@ from langcheck.auth.protocols import Authenticator
 from langcheck.check.protocols import TextChecker
 from langcheck.context.models import DocumentContext
 from langcheck.context.protocols import ContextSource
+from langcheck.documents.protocols import DocumentService
 from langcheck.limits.models import Permit, RateLimited
 from langcheck.limits.protocols import CheckLimiter
 from langcheck.llm.structured import Failed
@@ -33,6 +35,7 @@ class Services:
     checker: TextChecker
     contexts: ContextSource
     limiter: CheckLimiter
+    documents: DocumentService
 
 
 type ServicesFactory = Callable[[], AbstractAsyncContextManager[Services]]
@@ -69,6 +72,7 @@ def build_app(services: ServicesFactory) -> FastAPI:
                 )
 
     app = FastAPI(title="langcheck", lifespan=lifespan)
+    app.include_router(document_router(lambda: current().documents, user))
 
     @app.get("/health")
     async def health() -> HealthResponse:

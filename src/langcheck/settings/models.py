@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from langcheck.check.chunk import DEFAULT_MAX_WORDS
 from langcheck.context.builder import DEFAULT_MAX_PARAGRAPHS
+from langcheck.documents.sessions import DEFAULT_DEBOUNCE, DEFAULT_REFRESH_SHARE
 from langcheck.llm.models import ClientConfig
 from langcheck.scoring.factory import ScorerAdapter, ScorerConfig
 from langcheck.scoring.policy import KindPolicy, ScoringPolicy
@@ -93,12 +94,17 @@ class DatabaseSettings(BaseModel):
 
 
 class CheckerSettings(BaseModel):
-    """How text is split up for the LLM."""
+    """How text is split up for the LLM, and how open documents are re-checked:
+    ``debounce`` seconds after the last edit, rebuilding the document context once more
+    than ``context_refresh_share`` of its sentences changed.
+    """
 
     model_config = _SECTION
 
     max_words: Annotated[int, Field(ge=1)] = DEFAULT_MAX_WORDS
     context_max_paragraphs: Annotated[int, Field(ge=3)] = DEFAULT_MAX_PARAGRAPHS
+    debounce: Annotated[float, Field(ge=0)] = DEFAULT_DEBOUNCE
+    context_refresh_share: Annotated[float, Field(ge=0, le=1)] = DEFAULT_REFRESH_SHARE
 
 
 class KindPolicySettings(BaseModel):

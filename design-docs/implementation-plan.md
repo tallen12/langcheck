@@ -253,12 +253,16 @@ All endpoints except `/health` require authentication. `{uri}` is URL-encoded.
   hash, moves the offsets of existing suggestions in unchanged text, drops suggestions in
   changed text, and queues the changed chunks. Updates are debounced (for example 750 ms)
   so a typing user does not trigger a call per keystroke; a newer version cancels pending
-  work for the old one. Text patches instead of the full text can come later.
+  work for the old one. A stale base version gets 409 with the current version. Text
+  patches instead of the full text can come later.
 - `DELETE /documents/{uri}`: closes the session.
 - `POST /documents/{uri}/rename` with the new URI.
-- `GET /documents/{uri}/suggestions?version=N`: the current suggestions.
-- `GET /documents/{uri}/events` (Server-Sent Events): suggestions added and removed, and
-  check progress.
+- `GET /documents/{uri}/suggestions?version=N`: the current suggestions and check state;
+  409 with the current version when `N` is not current.
+- `GET /documents/{uri}/events` (Server-Sent Events): a `snapshot` event (version, check
+  state, all current suggestions) on every change, `closed` when the document closes or
+  is renamed, and a keep-alive comment every 15 s. Snapshots rather than added/removed
+  deltas, so a missed event never leaves a client showing stale suggestions.
 - `POST /documents/{uri}/suggestions/{sid}/accept` and `/dismiss`: accepting applies the
   chosen option and bumps the version; dismissing records the span and text so the same
   issue is not suggested again in this session.
