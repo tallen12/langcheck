@@ -259,6 +259,33 @@ def test_code_actions_offer_options_dictionary_and_dismiss() -> None:
     assert service.words == [(URI, ["teh"])]
 
 
+def test_no_quick_fixes_while_the_editor_text_is_ahead_of_the_diagnostics() -> None:
+    service, editor = FakeService(), Editor()
+    proxy = make(service, editor)
+    on_typo = Range(Position(0, 6), Position(0, 6))
+
+    async def run() -> tuple[int, int, int]:
+        await proxy.opened(URI, "Read teh book.")
+        await settle()
+        service.push(snapshot(1, typo(5)))
+        await settle()
+        before = len(proxy.code_actions(URI, on_typo))
+        # The user types; the new text is not checked yet, so the old ranges are off.
+        service.hold.clear()
+        await proxy.changed(URI, "Now: Read teh book.")
+        await settle()
+        while_typing = len(proxy.code_actions(URI, on_typo))
+        service.hold.set()
+        await settle()
+        service.push(snapshot(2, typo(10)))
+        await settle()
+        after = len(proxy.code_actions(URI, Range(Position(0, 11), Position(0, 11))))
+        await proxy.shutdown()
+        return before, while_typing, after
+
+    assert asyncio.run(run()) == (4, 0, 4)
+
+
 def test_closing_an_unknown_document_does_nothing() -> None:
     service, editor = FakeService(), Editor()
 
