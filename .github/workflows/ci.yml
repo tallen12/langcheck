@@ -66,6 +66,36 @@ jobs:
           path: coverage.xml
           if-no-files-found: error
 
+  vscode:
+    name: VS Code extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: "1.57.0"
+
+      # Type-checks, bundles and packages the extension.
+      - name: Run just vscode
+        run: just vscode
+
+      - name: Upload the extension
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: langcheck-vsix
+          path: editors/vscode/langcheck.vsix
+          if-no-files-found: error
+
   gitleaks:
     # Scans the whole history, so a commit made without the pre-commit hook
     # is still caught. Keep the version in step with .pre-commit-config.yaml.

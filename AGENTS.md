@@ -26,6 +26,8 @@ global interpreter.
 - Test: `just test`
 - Test coverage: `just coverage`
 - All required checks: `just check`
+- Build the VS Code extension (`editors/vscode/`, TypeScript): `just vscode` (needs
+  Node.js 22; type-checks, bundles and packages `langcheck.vsix`)
 - Remove finished worktrees and merged branches: `just prune-worktrees` (`--fetch`,
   `--dry-run`)
 - Render diagrams: `just diagrams` (needs Graphviz). Diagrams live in

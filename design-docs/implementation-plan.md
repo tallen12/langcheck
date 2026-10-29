@@ -423,9 +423,12 @@ CLI and `api` startup are the composition roots.
   so the change reaches the service as an ordinary update; `accept` is for clients
   without their own edit model.
 
-`editors/vscode/` holds the TypeScript extension: it starts `langcheck lsp` with the
-server URL and API key from VS Code settings (the key in VS Code's secret storage) and
-registers it for Markdown, plain text and other configured languages. Built into a
+`editors/vscode/` holds the TypeScript extension: it starts `langcheck lsp` (the command
+and its leading arguments are settings, so `uv run langcheck` works too) with the server
+URL from VS Code settings and the API key from VS Code's secret storage, both passed in
+the environment so the key never appears in the process list, and registers it for
+Markdown, plain text and other configured languages. It restarts the server when its
+settings or the key change. Built into a
 `.vsix` with `just vscode`. Neovim, Helix and Zed can use the same LSP server directly.
 
 ### LibreOffice: proofreader extension

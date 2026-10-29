@@ -39,6 +39,12 @@ coverage:
 # Run all required checks.
 check: lint typecheck layout test
 
+# Build the VS Code extension into editors/vscode/langcheck.vsix (needs Node.js 22).
+[working-directory: 'editors/vscode']
+vscode:
+    npm ci --no-audit --no-fund
+    npm run package
+
 # Remove finished worktrees and merged branches (flags: --fetch, --dry-run).
 prune-worktrees *flags:
     uv run python scripts/prune_worktrees.py {{flags}}

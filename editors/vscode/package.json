@@ -1,0 +1,67 @@
+{
+  "name": "langcheck",
+  "displayName": "langcheck",
+  "description": "Spelling and grammar checking with an LLM, through a shared langcheck server.",
+  "version": "0.1.0",
+  "publisher": "langcheck",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tallen12/langcheck"
+  },
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": ["Linters"],
+  "activationEvents": ["onLanguage:markdown", "onLanguage:plaintext"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "langcheck",
+      "properties": {
+        "langcheck.serverUrl": {
+          "type": "string",
+          "default": "",
+          "description": "URL of the langcheck server, for example https://langcheck.example.com."
+        },
+        "langcheck.command": {
+          "type": "string",
+          "default": "langcheck",
+          "description": "The langcheck executable that runs the language server."
+        },
+        "langcheck.args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Arguments before `lsp`, for example [\"run\", \"langcheck\"] with `uv` as the command."
+        },
+        "langcheck.languages": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["markdown", "plaintext"],
+          "description": "Language IDs to check."
+        }
+      }
+    },
+    "commands": [
+      { "command": "langcheck.setApiKey", "title": "langcheck: Set API Key" },
+      { "command": "langcheck.clearApiKey", "title": "langcheck: Clear API Key" },
+      { "command": "langcheck.restart", "title": "langcheck: Restart Language Server" }
+    ]
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "bundle": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=dist/extension.js --minify --sourcemap",
+    "package": "npm run check && npm run bundle && vsce package --no-dependencies --out langcheck.vsix"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "~1.95.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.6.0"
+  }
+}
