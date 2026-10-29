@@ -209,6 +209,11 @@ batching queue, so it never blocks the event loop. PyTorch builds (cpu, cuda, ro
 optional extras, as in contcheck, added in M3. Without a scorer, options keep the LLM's
 order.
 
+Scoring is off until `scorer.adapters` names `pll`, `cola` or both (their scores are
+summed), so the service runs without PyTorch installed; `just setup` installs the cpu
+build for development. Each option carries `score` and `delta` in the API (null when
+unscored), and the scorer's name, models and filters are part of the result cache key.
+
 ## Document context
 
 `DocumentContext` is a small value built by one LLM call over the document (or, for a
@@ -308,7 +313,8 @@ are in SQL from the start.
 nested Pydantic models. Two top-level classes, because the CLI and the server need
 different things:
 
-- `ClientSettings`: `server` (URL, API key, timeout) and `llm` for `--local` runs.
+- `ClientSettings`: `server` (URL, API key, timeout), and `llm`, `checker` and `scorer`
+  for `--local` runs.
 - `ServerSettings`: `http` (host, port), `llm` (base URL, model, API key, timeout,
   retries, concurrency, reasoning switch), `scorer` (adapters, model names, device,
   `ScoringPolicy` per kind), `auth` (mode, proxy user header), `database` (the SQL URL
@@ -370,6 +376,7 @@ it uses `llama3`. Every command takes `--config PATH`.
 - `langcheck check FILE [--json] [--local] [--no-score] [--apply]`: one-shot check,
   printed as `FILE:LINE:COL: Kind: 'original' -> options` with the line and explanation;
   `--apply` (not built yet) walks through suggestions interactively and writes the file.
+  `--no-score` keeps the LLM's option order in a `--local` run.
   Exits 0 when clean, 1 with suggestions or unchecked spans, 2 when it cannot run.
 - `langcheck watch FILE [--local]`: watches the file (`watchfiles`) and prints new and
   resolved suggestions as it changes.

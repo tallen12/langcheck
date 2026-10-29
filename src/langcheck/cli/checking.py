@@ -20,7 +20,7 @@ from langcheck.context.models import DocumentContext
 from langcheck.llm.async_openai_chat import AsyncOpenAIChatClient
 from langcheck.llm.models import ChatOptions
 from langcheck.llm.structured import Failed
-from langcheck.scoring.ranker import KeepOrder
+from langcheck.scoring.factory import AdapterLoader, load_adapter, open_ranker
 from langcheck.settings.loading import ClientSettings
 from langcheck.text.regex_splitter import RegexSentenceSplitter
 
@@ -56,10 +56,18 @@ class LocalChecker:
 
 @asynccontextmanager
 async def open_local(
-    settings: ClientSettings, *, transport: httpx.AsyncBaseTransport | None
+    settings: ClientSettings,
+    *,
+    transport: httpx.AsyncBaseTransport | None,
+    load: AdapterLoader = load_adapter,
 ) -> AsyncGenerator[LocalChecker]:
-    """A checker that talks to the LLM directly, open for the duration of the block."""
-    async with httpx.AsyncClient(transport=transport) as http:
+    """A checker that talks to the LLM directly (and loads the configured scorer), open
+    for the duration of the block.
+    """
+    async with (
+        httpx.AsyncClient(transport=transport) as http,
+        open_ranker(settings.scorer.scorer_config(), load=load) as ranker,
+    ):
         llm = AsyncOpenAIChatClient(http, settings.llm.client_config())
         options = ChatOptions()
         yield LocalChecker(
@@ -70,7 +78,7 @@ async def open_local(
                 model=settings.llm.model,
                 options=options,
                 policy=ValidationPolicy(),
-                ranker=KeepOrder(),
+                ranker=ranker,
                 max_words=settings.checker.max_words,
             ),
             contexts=ContextBuilder(

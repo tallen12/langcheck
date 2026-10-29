@@ -5,11 +5,15 @@ from pathlib import Path
 import httpx
 from fastapi.testclient import TestClient
 
-from langcheck.api.startup import create_app, utc_now
+from langcheck.api.app import build_app
+from langcheck.api.startup import create_app, open_services, utc_now
 from langcheck.auth.sql_store import SqlApiKeyStore
 from langcheck.auth.tokens import add_user
 from langcheck.database.schema import open_database
+from langcheck.scoring.factory import ScorerAdapter, ScorerConfig
+from langcheck.scoring.protocols import SentenceScorer
 from langcheck.settings.loading import ServerSettings, load_settings
+from tests.conftest import SyncTableScorer
 
 
 def settings_for(tmp_path: Path, *, auth: str) -> ServerSettings:
@@ -71,3 +75,50 @@ def test_api_key_mode_accepts_keys_from_the_database(tmp_path: Path) -> None:
 
     assert refused.status_code == 401
     assert accepted.status_code == 200
+
+
+def typo_llm(request: httpx.Request) -> httpx.Response:
+    """Like ``fake_llm`` but finds "teh" in S1."""
+    system = json.loads(request.content)["messages"][0]["content"]
+    if "numbered sentences" not in system:
+        return fake_llm(request)
+    issue = {
+        "sentence": "S1",
+        "original": "teh",
+        "kind": "Spelling",
+        "explanation": "Misspelt.",
+        "options": ["tea", "the"],
+    }
+    content = json.dumps({"issues": [issue]})
+    return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+
+def test_the_configured_scorer_ranks_options(tmp_path: Path) -> None:
+    settings = load_settings(
+        ServerSettings,
+        overrides={
+            "auth": {"mode": "none"},
+            "database": {"url": f"sqlite:///{tmp_path / 'langcheck.db'}"},
+            "llm": {"base_url": "http://llm.test/v1", "retries": 0},
+            "scorer": {"adapters": ["pll"]},
+        },
+        yaml_data={},
+    )
+    scorer = SyncTableScorer({"Read the book.": 2.0, "Read tea book.": -1.0})
+
+    def load(adapter: ScorerAdapter, config: ScorerConfig) -> SentenceScorer:
+        return scorer
+
+    app = build_app(
+        lambda: open_services(settings, transport=httpx.MockTransport(typo_llm), load=load)
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/check", json={"text": "Read teh book."})
+
+    [suggestion] = response.json()["suggestions"]
+    assert suggestion["options"] == [
+        {"replacement": "the", "score": 2.0, "delta": 2.0},
+        {"replacement": "tea", "score": -1.0, "delta": -1.0},
+    ]
+    assert len(scorer.batches) == 1

@@ -26,6 +26,7 @@ from langcheck.cli.environment import CliEnvironment, process_environment
 from langcheck.cli.render import render_check, render_context
 from langcheck.database.schema import open_database
 from langcheck.llm.models import LLMError
+from langcheck.scoring.factory import ScorerUnavailableError
 from langcheck.settings.loading import (
     ClientSettings,
     ServerSettings,
@@ -57,6 +58,7 @@ _EXPECTED_FAILURES = (
     ContextUnavailableError,
     LLMError,
     UserExistsError,
+    ScorerUnavailableError,
     OSError,
 )
 
@@ -119,16 +121,26 @@ def build_app(env: CliEnvironment) -> App:
         server: ServerOption = None,
         llm_url: LLMUrlOption = None,
         llm_model: LLMModelOption = None,
+        no_score: Annotated[
+            bool, Parameter(negative=(), help="Keep the LLM's option order (--local only).")
+        ] = False,
     ) -> int:
         """Check FILE and print the suggestions, or JSON with --json.
 
         Uses the configured server; with --local, or without a server, runs the checker
-        in this process against the LLM directly.
+        in this process against the LLM directly, ranking options with the configured
+        scorer unless --no-score is given.
         """
 
         def run() -> int:
             settings = client_settings(
-                config, {"server.url": server, "llm.base_url": llm_url, "llm.model": llm_model}
+                config,
+                {
+                    "server.url": server,
+                    "llm.base_url": llm_url,
+                    "llm.model": llm_model,
+                    "scorer.adapters": [] if no_score else None,
+                },
             )
             text = file.read_text(encoding="utf-8")
             response = asyncio.run(_check(settings, text, local=local, env=env))

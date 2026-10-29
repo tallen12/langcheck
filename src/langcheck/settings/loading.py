@@ -23,6 +23,7 @@ from langcheck.settings.models import (
     DatabaseSettings,
     HttpSettings,
     LLMSettings,
+    ScorerSettings,
     ServerConnection,
 )
 
@@ -84,6 +85,7 @@ class ClientSettings(_LayeredSettings):
     server: ServerConnection = Field(default_factory=ServerConnection)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     checker: CheckerSettings = Field(default_factory=CheckerSettings)
+    scorer: ScorerSettings = Field(default_factory=ScorerSettings)
 
 
 class ServerSettings(_LayeredSettings):
@@ -96,6 +98,7 @@ class ServerSettings(_LayeredSettings):
     auth: AuthSettings = Field(default_factory=AuthSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     checker: CheckerSettings = Field(default_factory=CheckerSettings)
+    scorer: ScorerSettings = Field(default_factory=ScorerSettings)
 
 
 class _MappingSource(PydanticBaseSettingsSource):

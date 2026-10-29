@@ -19,7 +19,7 @@ from langcheck.context.builder import ContextBuilder
 from langcheck.database.schema import open_database
 from langcheck.llm.async_openai_chat import AsyncOpenAIChatClient
 from langcheck.llm.models import ChatOptions
-from langcheck.scoring.ranker import KeepOrder
+from langcheck.scoring.factory import AdapterLoader, load_adapter, open_ranker
 from langcheck.settings.loading import ServerSettings
 from langcheck.settings.models import AuthMode
 from langcheck.text.regex_splitter import RegexSentenceSplitter
@@ -36,14 +36,19 @@ async def open_services(
     *,
     transport: httpx.AsyncBaseTransport | None = None,
     clock: Callable[[], datetime] = utc_now,
+    load: AdapterLoader = load_adapter,
 ) -> AsyncGenerator[Services]:
-    """Open the LLM client and database for ``settings`` and close them afterwards.
+    """Open the LLM client, scorer and database for ``settings`` and close them afterwards.
 
-    ``transport`` replaces the network for the LLM client, for tests.
+    ``transport`` replaces the network for the LLM client and ``load`` the scorer model
+    loader, for tests.
     """
     engine = open_database(settings.database.url)
     try:
-        async with httpx.AsyncClient(transport=transport) as http:
+        async with (
+            httpx.AsyncClient(transport=transport) as http,
+            open_ranker(settings.scorer.scorer_config(), load=load) as ranker,
+        ):
             llm = AsyncOpenAIChatClient(http, settings.llm.client_config())
             options = ChatOptions()
             yield Services(
@@ -55,7 +60,7 @@ async def open_services(
                     model=settings.llm.model,
                     options=options,
                     policy=ValidationPolicy(),
-                    ranker=KeepOrder(),
+                    ranker=ranker,
                     max_words=settings.checker.max_words,
                 ),
                 contexts=ContextBuilder(
