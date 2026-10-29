@@ -414,16 +414,24 @@ CLI and `api` startup are the composition roots.
 `src/langcheck/lsp/` is a language server built on `pygls`, started with
 `langcheck lsp --server URL`. It holds no checking logic:
 
-- `didOpen` / `didChange` / `didClose` → `PUT` / `DELETE /documents/{uri}`; LSP document
-  versions map to the service's versions.
-- Suggestion events from SSE → `publishDiagnostics`, with offsets converted to UTF-16
-  positions.
-- Each option → a quick fix code action, in ranked order; plus "Add to dictionary" and
-  "Dismiss" code actions.
+- `didOpen` / `didChange` / `didClose` → `PUT` / `DELETE /documents/{uri}`. Sync with the
+  editor is incremental; the proxy sends the full text, one update in flight per
+  document, with changes made meanwhile collapsed to the latest text. The proxy keeps
+  the text of each service version it sent.
+- Suggestion events from SSE → `publishDiagnostics`, only for the service version whose
+  text the proxy sent last, with offsets converted to UTF-16 positions. A lost stream
+  re-sends the text, which also recovers from a service restart.
+- Each option → a quick fix code action, in ranked order (the best preferred); plus "Add
+  to dictionary" (single words) and "Dismiss" code actions. Quick fixes are editor edits,
+  so the change reaches the service as an ordinary update; `accept` is for clients
+  without their own edit model.
 
-`editors/vscode/` holds the TypeScript extension: it starts `langcheck lsp` with the
-server URL and API key from VS Code settings (the key in VS Code's secret storage) and
-registers it for Markdown, plain text and other configured languages. Built into a
+`editors/vscode/` holds the TypeScript extension: it starts `langcheck lsp` (the command
+and its leading arguments are settings, so `uv run langcheck` works too) with the server
+URL from VS Code settings and the API key from VS Code's secret storage, both passed in
+the environment so the key never appears in the process list, and registers it for
+Markdown, plain text and other configured languages. It restarts the server when its
+settings or the key change. Built into a
 `.vsix` with `just vscode`. Neovim, Helix and Zed can use the same LSP server directly.
 
 ### LibreOffice: proofreader extension

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Protocol
 
 from fastapi import FastAPI
+from pygls.lsp.server import LanguageServer
 
 
 class ServerRunner(Protocol):
@@ -20,4 +21,12 @@ class FileWatcher(Protocol):
 
     def changes(self, path: Path) -> AsyncIterator[None]:
         """Yield once after each change to ``path``, until cancelled."""
+        ...
+
+
+class LanguageServerRunner(Protocol):
+    """Runs a language server over the process's stdin and stdout."""
+
+    def run(self, server: LanguageServer) -> None:
+        """Serve until the editor shuts the server down."""
         ...
