@@ -1,10 +1,13 @@
 """Protocols of the check domain."""
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 from langcheck.check.cache_models import CacheKey, SentenceResult
+from langcheck.check.suggestion import Suggestion
 from langcheck.context.models import DocumentContext
+from langcheck.text.models import Sentence
 
 if TYPE_CHECKING:
     # Only for annotations: checker.py imports this module for ResultCache.
@@ -39,4 +42,27 @@ class TextChecker(Protocol):
         dictionary: Collection[str] = (),
     ) -> CheckResult:
         """The suggestions for ``text``; ``dictionary`` words are never flagged."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class Ranking:
+    """Suggestions with their options rated and best first, and those a policy dropped."""
+
+    kept: tuple[Suggestion, ...]
+    dropped: tuple[Suggestion, ...]
+
+
+class OptionRanker(Protocol):
+    """Orders each suggestion's options and may drop suggestions no option improves."""
+
+    @property
+    def name(self) -> str:
+        """Identifies the ranking in result cache keys; equal names rank the same way."""
+        ...
+
+    async def rank(
+        self, suggestions: Sequence[Suggestion], sentences: Sequence[Sentence]
+    ) -> Ranking:
+        """Rank ``suggestions``, each of which lies inside one of ``sentences``."""
         ...

@@ -18,12 +18,47 @@ dependencies = [
     "uvicorn>=0.54.0",
 ]
 
+[project.optional-dependencies]
+# Scorer models; install exactly one PyTorch build with `just setup <build>`. The service
+# runs without them when no scorer is configured.
+cpu = ["torch==2.14.1", "transformers>=5.20.2"]
+cuda = ["torch==2.14.1", "transformers>=5.20.2"]
+rocm = ["torch==2.14.1", "transformers>=5.20.2", "triton-rocm==3.8.0"]
+
 [project.scripts]
 langcheck = "langcheck.cli.main:main"
 
 [build-system]
 requires = ["uv_build>=0.11.2,<0.12.0"]
 build-backend = "uv_build"
+
+[tool.uv]
+conflicts = [[{ extra = "cpu" }, { extra = "cuda" }, { extra = "rocm" }]]
+
+[tool.uv.sources]
+torch = [
+    # macOS takes PyPI's build, which is the CPU (and MPS) build there.
+    { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu130", extra = "cuda" },
+    { index = "pytorch-rocm", extra = "rocm" },
+]
+# The ROCm torch needs triton-rocm, which exists only on the ROCm index.
+triton-rocm = [{ index = "pytorch-rocm", extra = "rocm" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm7.2"
+explicit = true
 
 [tool.ruff]
 target-version = "py314"

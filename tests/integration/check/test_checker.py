@@ -20,6 +20,7 @@ from langcheck.context.builder import ContextBuilder
 from langcheck.context.models import DocumentContext
 from langcheck.llm.async_openai_chat import AsyncOpenAIChatClient
 from langcheck.llm.models import ChatOptions, ClientConfig
+from langcheck.scoring.ranker import KeepOrder
 from langcheck.text.regex_splitter import RegexSentenceSplitter
 
 pytestmark = pytest.mark.llm
@@ -58,6 +59,7 @@ async def build_and_check(config: ClientConfig) -> tuple[DocumentContext, CheckR
             model=config.model,
             options=options,
             policy=ValidationPolicy(),
+            ranker=KeepOrder(),
         )
         return built, await checker.check(TEXT, user="test", context=built)
 

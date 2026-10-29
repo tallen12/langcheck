@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from langcheck.check.cache_models import CacheKey, CacheSetting, SentenceResult, cache_key
 from langcheck.check.chunk import DEFAULT_MAX_WORDS, Chunk, chunk_sentences
 from langcheck.check.prompt import PROMPT_VERSION, check_messages
-from langcheck.check.protocols import ResultCache
+from langcheck.check.protocols import OptionRanker, ResultCache
 from langcheck.check.reply import CheckReply
 from langcheck.check.resolve import Rejection, ValidationPolicy, resolve
 from langcheck.check.suggestion import Suggestion
@@ -30,13 +30,15 @@ class Unchecked:
 
 @dataclass(frozen=True, slots=True)
 class CheckResult:
-    """The suggestions for a text in document order, what could not be checked, and the
-    issues rejected during resolution (for metrics; empty for cached sentences).
+    """The suggestions for a text in document order, what could not be checked, and, for
+    metrics, the issues rejected during resolution and the suggestions the scoring policy
+    filtered out (both empty for cached sentences).
     """
 
     suggestions: tuple[Suggestion, ...]
     unchecked: tuple[Unchecked, ...]
     rejections: tuple[Rejection, ...]
+    filtered: tuple[Suggestion, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,13 +46,15 @@ class _ChunkOutcome:
     suggestions: tuple[Suggestion, ...]
     unchecked: tuple[Unchecked, ...]
     rejections: tuple[Rejection, ...]
+    filtered: tuple[Suggestion, ...]
 
 
 class Checker:
     """Checks texts with an LLM, sending only sentences the cache does not know.
 
-    Options keep the LLM's order; scoring ranks them later. ``model`` names the LLM model
-    for cache keys, so changing models never reuses old results.
+    ``ranker`` orders each suggestion's options (and may filter suggestions) before they
+    are cached. ``model`` names the LLM model for cache keys, so changing models never
+    reuses old results; the ranker's name is part of the key for the same reason.
     """
 
     def __init__(
@@ -62,9 +66,11 @@ class Checker:
         model: str,
         options: ChatOptions,
         policy: ValidationPolicy,
+        ranker: OptionRanker,
         max_words: int = DEFAULT_MAX_WORDS,
     ) -> None:
         self._llm = llm
+        self._ranker = ranker
         self._splitter = splitter
         self._cache = cache
         self._model = model
@@ -82,7 +88,13 @@ class Checker:
     ) -> CheckResult:
         """Check ``text`` for ``user``; ``dictionary`` words are never flagged."""
         segmentation = segment(text, splitter=self._splitter)
-        setting = CacheSetting(self._model, PROMPT_VERSION, context.version, tuple(dictionary))
+        setting = CacheSetting(
+            model=self._model,
+            prompt_version=PROMPT_VERSION,
+            context_version=context.version,
+            dictionary=tuple(dictionary),
+            ranker=self._ranker.name,
+        )
         keys = _sentence_keys(segmentation.sentences, user=user, setting=setting)
         cached = await asyncio.gather(
             *(self._cache.get(keys[s.id]) for s in segmentation.sentences)
@@ -103,6 +115,7 @@ class Checker:
             suggestions=tuple(sorted(suggestions, key=lambda s: s.span.start)),
             unchecked=tuple(u for outcome in outcomes for u in outcome.unchecked),
             rejections=tuple(r for outcome in outcomes for r in outcome.rejections),
+            filtered=tuple(f for outcome in outcomes for f in outcome.filtered),
         )
 
     async def _check_chunks(
@@ -136,7 +149,7 @@ class Checker:
         match await complete_structured(self._llm, messages, CheckReply, options=self._options):
             case Failed(reason=reason):
                 unchecked = tuple(Unchecked(s.span, reason) for s in chunk.sentences)
-                return _ChunkOutcome((), unchecked, ())
+                return _ChunkOutcome((), unchecked, (), ())
             case Parsed(value=reply):
                 resolution = resolve(
                     reply,
@@ -144,11 +157,12 @@ class Checker:
                     policy=self._policy,
                     intentional={*context.glossary, *dictionary},
                 )
+                ranking = await self._ranker.rank(resolution.suggestions, chunk.sentences)
                 for sentence in chunk.sentences:
-                    inside = [s for s in resolution.suggestions if _within(s.span, sentence.span)]
+                    inside = [s for s in ranking.kept if _within(s.span, sentence.span)]
                     result = SentenceResult.relative_to(sentence.span.start, inside)
                     await self._cache.put(keys[sentence.id], result)
-                return _ChunkOutcome(resolution.suggestions, (), resolution.rejections)
+                return _ChunkOutcome(ranking.kept, (), resolution.rejections, ranking.dropped)
 
 
 def _sentence_keys(

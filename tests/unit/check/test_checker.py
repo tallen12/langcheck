@@ -6,13 +6,17 @@ from dataclasses import replace
 
 from langcheck.check.checker import Checker, CheckResult, Unchecked
 from langcheck.check.memory_cache import MemoryResultCache
+from langcheck.check.protocols import OptionRanker
 from langcheck.check.resolve import RejectionReason, ValidationPolicy
-from langcheck.check.suggestion import Option
+from langcheck.check.suggestion import Option, Scored
 from langcheck.context.models import DocumentContext
 from langcheck.llm.models import ChatMessage, ChatOptions, LLMError
+from langcheck.scoring.policy import KindPolicy, ScoringPolicy
+from langcheck.scoring.ranker import KeepOrder, ScoringRanker
+from langcheck.taxonomy.kinds import ErrorKind
 from langcheck.text.models import Span
 from langcheck.text.regex_splitter import RegexSentenceSplitter
-from tests.conftest import ScriptedLLM
+from tests.conftest import ScriptedLLM, TableScorer
 
 FIXES = {"teh": "the", "recieve": "receive", "Bilbo": "Bill"}
 _FOCUS = re.compile(r"^\[(S\d+)\] (.*)$", re.MULTILINE)
@@ -35,7 +39,13 @@ def proofreader(messages: Sequence[ChatMessage]) -> str:
     return json.dumps({"issues": issues})
 
 
-def make_checker(llm: ScriptedLLM, *, model: str = "m", max_words: int = 250) -> Checker:
+def make_checker(
+    llm: ScriptedLLM,
+    *,
+    model: str = "m",
+    max_words: int = 250,
+    ranker: OptionRanker | None = None,
+) -> Checker:
     return Checker(
         llm,
         splitter=RegexSentenceSplitter(),
@@ -43,6 +53,7 @@ def make_checker(llm: ScriptedLLM, *, model: str = "m", max_words: int = 250) ->
         model=model,
         options=ChatOptions(),
         policy=ValidationPolicy(),
+        ranker=ranker or KeepOrder(),
         max_words=max_words,
     )
 
@@ -135,3 +146,21 @@ def test_empty_text_needs_no_llm_call() -> None:
 
     assert check(make_checker(llm), "  \n") == CheckResult((), (), ())
     assert llm.chats == []
+
+
+def test_ranked_options_are_cached_and_filtered_suggestions_reported() -> None:
+    llm = ScriptedLLM([proofreader])
+    scorer = TableScorer({"Read the book.": 1.0, "I receive mail.": -1.0})
+    policy = ScoringPolicy({ErrorKind.SPELLING: KindPolicy(filter=True)})
+    checker = make_checker(llm, ranker=ScoringRanker(scorer, policy=policy, name="table"))
+
+    first = check(checker, "Read teh book. I recieve mail.")
+    again = check(checker, "Read teh book. I recieve mail.")
+
+    [kept] = first.suggestions
+    assert kept.original == "teh"
+    assert kept.options[0].rating == Scored(score=1.0, delta=1.0)
+    assert [s.original for s in first.filtered] == ["recieve"]
+    assert again.suggestions == first.suggestions
+    assert len(llm.chats) == 1
+    assert len(scorer.batches) == 1

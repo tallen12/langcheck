@@ -8,7 +8,7 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field
 
 from langcheck.check.checker import CheckResult, Unchecked
-from langcheck.check.suggestion import Suggestion
+from langcheck.check.suggestion import Option, Scored, Suggestion, Unscored
 from langcheck.context.models import DocumentContext, Register
 from langcheck.taxonomy.kinds import ErrorKind, Operation
 
@@ -77,11 +77,24 @@ class ContextRequest(BaseModel):
 
 
 class OptionBody(BaseModel):
-    """One candidate replacement, best first."""
+    """One candidate replacement, best first. ``score`` and ``delta`` (how much the
+    candidate sentence improves on the original) are null when no scorer ran.
+    """
 
     model_config = _BODY
 
     replacement: str
+    score: float | None = None
+    delta: float | None = None
+
+    @classmethod
+    def of(cls, option: Option) -> OptionBody:
+        """The body for ``option``."""
+        match option.rating:
+            case Scored(score=score, delta=delta):
+                return cls(replacement=option.replacement, score=score, delta=delta)
+            case Unscored():
+                return cls(replacement=option.replacement)
 
 
 class SuggestionBody(BaseModel):
@@ -109,7 +122,7 @@ class SuggestionBody(BaseModel):
             kind=suggestion.kind,
             operation=suggestion.operation,
             explanation=suggestion.explanation,
-            options=[OptionBody(replacement=o.replacement) for o in suggestion.options],
+            options=[OptionBody.of(o) for o in suggestion.options],
         )
 
 

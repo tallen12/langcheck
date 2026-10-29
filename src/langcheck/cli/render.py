@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 
-from langcheck.api.schemas import CheckResponse, ContextBody
+from langcheck.api.schemas import CheckResponse, ContextBody, OptionBody
 
 
 def line_and_column(text: str, offset: int) -> tuple[int, int]:
@@ -14,12 +14,13 @@ def line_and_column(text: str, offset: int) -> tuple[int, int]:
 
 def render_check(path: str, text: str, response: CheckResponse) -> str:
     """One block per suggestion, ``path:line:col``-prefixed like a compiler error, with the
-    line it is on and the options in order; then any spans that could not be checked.
+    line it is on and the options best first (with their score delta when ranked); then
+    any spans that could not be checked.
     """
     blocks: list[str] = []
     for suggestion in response.suggestions:
         line, column = line_and_column(text, suggestion.start)
-        options = " | ".join(f"{o.replacement!r}" for o in suggestion.options)
+        options = " | ".join(_option(o) for o in suggestion.options)
         blocks.append(
             "\n".join(
                 [
@@ -48,6 +49,13 @@ def render_context(context: ContextBody) -> str:
         ("notes", context.notes),
     ]
     return "\n".join(f"{label}: {value}" for label, value in rows)
+
+
+def _option(option: OptionBody) -> str:
+    """The replacement, with how much it improves the sentence when it was scored."""
+    if option.delta is None:
+        return repr(option.replacement)
+    return f"{option.replacement!r} ({option.delta:+.2f})"
 
 
 def _line_at(text: str, offset: int) -> str:

@@ -60,3 +60,30 @@ def test_render_context_labels_each_field() -> None:
     assert render_context(CONTEXT) == (
         "summary: S\nregister: formal\ndialect: en-GB\nglossary: Bilbo, Shire\nnotes: n"
     )
+
+
+def test_render_check_shows_score_deltas_when_ranked() -> None:
+    start = TEXT.index("their")
+    response = CheckResponse(
+        suggestions=[
+            SuggestionBody(
+                id="sg_1",
+                start=start,
+                end=start + 5,
+                original="their",
+                kind=ErrorKind.APOSTROPHE,
+                operation=Operation.REPLACEMENT,
+                explanation="",
+                options=[
+                    OptionBody(replacement="they're", score=-1.0, delta=2.5),
+                    OptionBody(replacement="there", score=-4.0, delta=-0.5),
+                ],
+            )
+        ],
+        unchecked=[],
+        context=CONTEXT,
+    )
+
+    assert "'their' -> \"they're\" (+2.50) | 'there' (-0.50)" in render_check(
+        "a.md", TEXT, response
+    )

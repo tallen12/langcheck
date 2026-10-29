@@ -12,6 +12,10 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from langcheck.check.chunk import DEFAULT_MAX_WORDS
 from langcheck.context.builder import DEFAULT_MAX_PARAGRAPHS
 from langcheck.llm.models import ClientConfig
+from langcheck.scoring.factory import ScorerAdapter, ScorerConfig
+from langcheck.scoring.policy import KindPolicy, ScoringPolicy
+from langcheck.scoring.threaded import DEFAULT_MAX_BATCH
+from langcheck.taxonomy.kinds import ErrorKind
 
 _SECTION = ConfigDict(frozen=True, extra="forbid")
 
@@ -95,3 +99,45 @@ class CheckerSettings(BaseModel):
 
     max_words: Annotated[int, Field(ge=1)] = DEFAULT_MAX_WORDS
     context_max_paragraphs: Annotated[int, Field(ge=3)] = DEFAULT_MAX_PARAGRAPHS
+
+
+class KindPolicySettings(BaseModel):
+    """Filtering for one error kind: drop an issue unless an option beats the original
+    sentence by more than ``margin``.
+    """
+
+    model_config = _SECTION
+
+    filter: bool = False
+    margin: float = 0.0
+
+
+class ScorerSettings(BaseModel):
+    """Which sentence scorers rank options. No adapters (the default) means options keep
+    the LLM's order and PyTorch is not needed; ``pll`` and ``cola`` need a PyTorch build
+    (``just setup cpu``) and download their models on first use.
+    """
+
+    model_config = _SECTION
+
+    adapters: list[ScorerAdapter] = Field(default_factory=list)
+    device: str = "cpu"
+    pll_model: str = "distilroberta-base"
+    cola_model: str = "textattack/roberta-base-CoLA"
+    window: Annotated[int, Field(ge=0)] = 3
+    max_batch: Annotated[int, Field(ge=1)] = DEFAULT_MAX_BATCH
+    policy: dict[ErrorKind, KindPolicySettings] = Field(default_factory=dict)
+
+    def scorer_config(self) -> ScorerConfig:
+        """The scoring domain's configuration."""
+        return ScorerConfig(
+            adapters=tuple(dict.fromkeys(self.adapters)),
+            device=self.device,
+            pll_model=self.pll_model,
+            cola_model=self.cola_model,
+            window=self.window,
+            max_batch=self.max_batch,
+            policy=ScoringPolicy(
+                {kind: KindPolicy(rule.filter, rule.margin) for kind, rule in self.policy.items()}
+            ),
+        )

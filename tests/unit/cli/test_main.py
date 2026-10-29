@@ -1,5 +1,6 @@
 import json
 import re
+import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -241,3 +242,15 @@ def test_nested_overrides_skip_unset_options() -> None:
         "llm": {"model": "m"},
         "server": {"url": "u"},
     }
+
+
+def test_check_reports_a_configured_scorer_without_pytorch(
+    cli: Cli, notes: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LANGCHECK_SCORER__ADAPTERS", '["pll"]')
+    monkeypatch.setitem(sys.modules, "langcheck.scoring.pll", None)
+
+    assert cli("check", str(notes)) == FAILED
+    assert "just setup cpu" in cli.err[-1]
+
+    assert cli("check", str(notes), "--no-score") == FOUND
