@@ -227,11 +227,14 @@ long document, its first N and last N paragraphs plus a sample):
 - `notes`: tense and person of narration, other conventions.
 
 It is versioned. It is rebuilt when a set share of the document (for example 20%) has
-changed since the last build, or when the client asks. Words in the document's
-dictionary are passed to the builder, so they join the glossary of the next build. They
-are not sent with each chunk: the checker drops issues on dictionary words after the
-result cache (pipeline step 6), so adding or removing a word never re-sends cached
-sentences to the LLM.
+changed since the last build, or when the client asks. For an open document, words in
+its dictionary are passed to the builder, so they join the glossary of the next build. A
+one-shot `POST /check` builds a context on every request, so it leaves the stored
+dictionary out of the build: in the glossary it would change the context version, and
+with it every cache key, each time a word is added or removed. Dictionary words are not
+sent with each chunk: the checker drops issues on dictionary words after the result cache
+(pipeline step 6), so adding or removing a word never re-sends cached sentences to the
+LLM.
 
 ## Service
 

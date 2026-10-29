@@ -115,7 +115,10 @@ async def _check(services: Services, body: CheckRequest, caller: User) -> CheckR
     if body.context is not None:
         context = body.context.to_context()
     else:
-        context = await _context_or_empty(services.contexts, body.text, words)
+        # A one-shot check builds its context every time, so the stored dictionary stays
+        # out of it: in the glossary it would change the context version, and with it
+        # every cache key, whenever a word is added or removed.
+        context = await _context_or_empty(services.contexts, body.text, body.dictionary)
     result = await services.checker.check(
         body.text, user=caller.name, context=context, dictionary=words
     )
