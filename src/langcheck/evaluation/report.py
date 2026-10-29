@@ -6,7 +6,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from langcheck.evaluation.runner import RunResult
+from langcheck.evaluation.runner import Effect, RunResult
 from langcheck.evaluation.scoring import Counts
 from langcheck.taxonomy.kinds import ErrorKind
 
@@ -77,7 +77,7 @@ class Outcome(BaseModel):
 
     kind: ErrorKind
     delta: float | None
-    correct: bool
+    effect: Effect
 
 
 class Report(BaseModel):
@@ -125,7 +125,7 @@ def build_report(
         filtered=sum(s.filtered for s in run.sentences),
         latency=Latency.of([s.seconds for s in run.sentences]),
         outcomes=[
-            Outcome(kind=o.kind, delta=o.delta, correct=o.correct)
+            Outcome(kind=o.kind, delta=o.delta, effect=o.effect)
             for s in run.sentences
             for o in s.outcomes
         ],

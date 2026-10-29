@@ -8,7 +8,7 @@ from langcheck.evaluation.report import (
     compare_reports,
     render_report,
 )
-from langcheck.evaluation.runner import RunResult, SentenceResult, SuggestionOutcome
+from langcheck.evaluation.runner import Effect, RunResult, SentenceResult, SuggestionOutcome
 from langcheck.evaluation.scoring import Counts, Score
 from langcheck.taxonomy.kinds import ErrorKind
 
@@ -31,7 +31,7 @@ RUN = RunResult(
         sentence(
             Score(Counts(tp=1, fp=1), {ErrorKind.SPELLING: Counts(tp=1), None: Counts(fp=1)}),
             1.0,
-            SuggestionOutcome(ErrorKind.SPELLING, 2.0, True),
+            SuggestionOutcome(ErrorKind.SPELLING, 2.0, Effect.CORRECT),
         ),
         sentence(Score(Counts(fn=1), {ErrorKind.DETERMINER: Counts(fn=1)}), 3.0, unchecked=True),
     )
@@ -53,8 +53,8 @@ def test_build_report_sums_sentences_and_keeps_outcomes() -> None:
     assert report.rejections == {"not_found": 2}
     assert (report.unchecked, report.filtered) == (1, 2)
     assert report.latency == Latency(count=2, mean=2.0, p50=3.0, p90=3.0, max=3.0)
-    assert [(o.kind, o.delta, o.correct) for o in report.outcomes] == [
-        (ErrorKind.SPELLING, 2.0, True)
+    assert [(o.kind, o.delta, o.effect) for o in report.outcomes] == [
+        (ErrorKind.SPELLING, 2.0, Effect.CORRECT)
     ]
     assert report.kind_counts()["Determiner"] == Counts(fn=1)
 

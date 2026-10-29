@@ -5,6 +5,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 
 from langcheck.check.checker import CheckResult
 from langcheck.check.protocols import TextChecker
@@ -12,6 +13,7 @@ from langcheck.check.resolve import RejectionReason
 from langcheck.check.suggestion import Scored, Suggestion
 from langcheck.context.models import DocumentContext
 from langcheck.evaluation.examples import Example
+from langcheck.evaluation.models import EditKey, ScoredEdit
 from langcheck.evaluation.protocols import EditAnnotator
 from langcheck.evaluation.scoring import Counts, Score, best_annotator
 from langcheck.taxonomy.kinds import ErrorKind
@@ -20,15 +22,26 @@ EVALUATION_USER = "evaluation"
 DEFAULT_CONCURRENCY = 4
 
 
+class Effect(StrEnum):
+    """What one suggestion, applied alone, does to the score."""
+
+    CORRECT = "correct"
+    """It makes edits, and every one is a gold edit."""
+    WRONG = "wrong"
+    """It makes at least one edit that is not a gold edit."""
+    NONE = "none"
+    """It makes no edit ERRANT counts, such as spacing in tokenized input."""
+
+
 @dataclass(frozen=True, slots=True)
 class SuggestionOutcome:
-    """One suggestion on its own: its kind, best delta (``None`` unscored), and whether
-    every edit it makes is a gold edit. Used to tune the scoring policy.
+    """One suggestion on its own: its kind as the LLM labelled it, its best delta
+    (``None`` unscored) and its effect. Used to tune the scoring policy.
     """
 
     kind: ErrorKind
     delta: float | None
-    correct: bool
+    effect: Effect
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +124,7 @@ def score_all(
                 SuggestionOutcome(
                     kind=suggestion.kind,
                     delta=_delta(suggestion),
-                    correct=bool(alone) and all(edit.key in gold_keys for edit in alone),
+                    effect=_effect(alone, gold_keys),
                 )
             )
         sentences.append(
@@ -149,6 +162,12 @@ def apply_best(text: str, suggestions: Sequence[Suggestion]) -> str:
         position = suggestion.span.end
     parts.append(text[position:])
     return "".join(parts)
+
+
+def _effect(edits: Sequence[ScoredEdit], gold_keys: set[EditKey]) -> Effect:
+    if not edits:
+        return Effect.NONE
+    return Effect.CORRECT if all(edit.key in gold_keys for edit in edits) else Effect.WRONG
 
 
 def _delta(suggestion: Suggestion) -> float | None:

@@ -574,8 +574,13 @@ latency), applies each suggestion's best option, extracts the edits with ERRANT
 contcheck's ERRANT map. Its JSON report in `runs/` also holds rejections by reason and
 every suggestion's kind, best delta and correctness; `evaluate tune` uses those to pick a
 margin per kind and prints `scorer.policy` YAML, and `evaluate compare` sets two runs
-side by side. Correctness for tuning is per suggestion (all its edits are gold edits),
-an approximation of ERRANT's per-edit counts. The comparison with contcheck's tagger
+side by side. Tuning groups suggestions by the kind the LLM gave them (what the policy
+acts on; ERRANT may type the same edit differently) and judges a kind's filter by its
+effect on overall F0.5: a correct suggestion (all its edits are gold edits) dropped
+becomes a false negative, a wrong one dropped removes a false positive, and one with no
+effect (no edit ERRANT counts, such as spacing in tokenized input) is ignored. A kind
+needs 20 scored suggestions before it is tuned (`--min-suggestions`); on 200 CoNLL-2014
+sentences, smaller kinds "gained" up to 0.3 F0.5 from noise. The comparison with contcheck's tagger
 needs contcheck's own run on the same sets and is not part of this command.
 
 ## Features

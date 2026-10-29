@@ -9,7 +9,7 @@ from langcheck.check.suggestion import Option, Scored, Suggestion, suggestion_id
 from langcheck.context.models import DocumentContext
 from langcheck.evaluation.examples import Example
 from langcheck.evaluation.models import ScoredEdit
-from langcheck.evaluation.runner import EVALUATION_USER, apply_best, check_all, evaluate
+from langcheck.evaluation.runner import EVALUATION_USER, Effect, apply_best, check_all, evaluate
 from langcheck.evaluation.scoring import Counts
 from langcheck.taxonomy.kinds import ErrorKind, Operation
 from langcheck.text.models import Span
@@ -86,11 +86,11 @@ def test_evaluate_scores_sentences_and_suggestions() -> None:
 
     assert run.score.overall == Counts(tp=1, fp=2, fn=1)
     go, fine = run.sentences
-    assert [(o.kind, o.delta, o.correct) for o in go.outcomes] == [
-        (ErrorKind.SUBJECT_VERB_AGREEMENT, 2.0, True),
-        (ErrorKind.SPELLING, None, False),
+    assert [(o.kind, o.delta, o.effect) for o in go.outcomes] == [
+        (ErrorKind.SUBJECT_VERB_AGREEMENT, 2.0, Effect.CORRECT),
+        (ErrorKind.SPELLING, None, Effect.WRONG),
     ]
-    assert [(o.kind, o.correct) for o in fine.outcomes] == [(ErrorKind.REAL_WORD, False)]
+    assert [(o.kind, o.effect) for o in fine.outcomes] == [(ErrorKind.REAL_WORD, Effect.WRONG)]
     assert run.rejections == Counter({RejectionReason.UNKNOWN_KIND: 1})
     assert (go.unchecked, fine.unchecked) == (False, True)
     assert {(text, user) for text, user, _ in checker.calls} == {

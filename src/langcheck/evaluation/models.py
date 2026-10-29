@@ -4,6 +4,9 @@ from dataclasses import dataclass
 
 from langcheck.taxonomy.kinds import ErrorKind
 
+type EditKey = tuple[int, int, tuple[str, ...]]
+"""Span and correction: what two edits must share to match."""
+
 
 @dataclass(frozen=True, slots=True)
 class ScoredEdit:
@@ -19,6 +22,6 @@ class ScoredEdit:
     kind: ErrorKind | None
 
     @property
-    def key(self) -> tuple[int, int, tuple[str, ...]]:
+    def key(self) -> EditKey:
         """What must agree for two edits to match: span and correction, not kind."""
         return self.start, self.end, self.correction
