@@ -182,14 +182,24 @@ allowed without asking, and only on your own work branch.
    branch was backed up, also delete the remote copy:
    `git push origin --delete work/<feature>/<task>`.
 
-   In a worktree the host created, git cannot remove the worktree you are in or delete
-   the branch it has checked out. Detach it instead, delete the branch, and leave the
-   directory for the host to clean up:
+   If your shell or session is inside the worktree, git cannot remove the worktree you
+   are in or delete the branch it has checked out. Detach it instead and delete the
+   branch:
 
    ```bash
    git switch --detach feat/<feature>
    git -C <main checkout> branch -D work/<feature>/<task>
    ```
+
+   Then run `just prune-worktrees` from the main checkout once your session has left the
+   worktree, at the latest when the feature merges (step 5). Leave a host-created
+   worktree outside `.worktrees/` for the host to clean up.
+
+`just prune-worktrees` removes only what is provably finished and never anything with
+uncommitted or untracked files: detached worktrees under `.worktrees/`, work branches
+whose commits have all landed on their feature branch (with their worktree), and local
+branches whose remote branch is gone after their pull request merged. It lists what it
+kept and why. Add `--dry-run` to see what it would do.
 
 If two agents finish at once, land one task first; the other rebases (step 4.1) and lands
 after it.
@@ -206,6 +216,15 @@ git push -u origin feat/<feature>
 The feature branch is the only branch that goes to GitHub for review. Work branches reach
 GitHub only as backups (step 3) and are deleted when the task lands.
 
+After the pull request merges, GitHub deletes the remote feature branch. Switch the main
+checkout to `main`, update it, and prune the local feature branch:
+
+```bash
+git switch main
+git pull --ff-only
+just prune-worktrees --fetch
+```
+
 ## Rules
 
 - Follow the commit rules in `AGENTS.md`: commit or push only when the user asks. Asking
@@ -219,5 +238,6 @@ GitHub only as backups (step 3) and are deleted when the task lands.
   branch, and never stack pull requests.
 - Never force-push, rewrite the feature branch's history or delete a branch with unlanded
   work without the user's approval.
-- If a worktree or work branch from an earlier task is still present, ask before removing
-  it; another agent may be using it.
+- Clean up only with `just prune-worktrees`. If a worktree or work branch from an earlier
+  task is still present after it runs, it has work that has not landed: ask before
+  removing it; another agent may be using it.

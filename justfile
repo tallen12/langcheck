@@ -39,6 +39,10 @@ coverage:
 # Run all required checks.
 check: lint typecheck layout test
 
+# Remove finished worktrees and merged branches (flags: --fetch, --dry-run).
+prune-worktrees *flags:
+    uv run python scripts/prune_worktrees.py {{flags}}
+
 # Run the CLI (pass arguments after the recipe name; quoted arguments stay whole).
 [positional-arguments]
 cli *args:
