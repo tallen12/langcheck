@@ -70,6 +70,10 @@ extend-exclude = ["design-docs"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ANN", "ASYNC", "RUF", "PTH"]
 
+[tool.ty.environment]
+# Stubs for the UNO modules LibreOffice provides to the extension at run time.
+extra-paths = ["stubs"]
+
 [tool.ty.rules]
 all = "error"
 
