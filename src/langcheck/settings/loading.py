@@ -23,6 +23,7 @@ from langcheck.settings.models import (
     CheckerSettings,
     DatabaseSettings,
     HttpSettings,
+    LimitsSettings,
     LLMSettings,
     ScorerSettings,
     ServerConnection,
@@ -100,6 +101,7 @@ class ServerSettings(_LayeredSettings):
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     checker: CheckerSettings = Field(default_factory=CheckerSettings)
     scorer: ScorerSettings = Field(default_factory=ScorerSettings)
+    limits: LimitsSettings = Field(default_factory=LimitsSettings)
 
 
 class _MappingSource(PydanticBaseSettingsSource):

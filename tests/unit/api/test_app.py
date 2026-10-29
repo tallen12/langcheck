@@ -9,9 +9,14 @@ from langcheck.auth.models import AuthResult, Unauthenticated, User
 from langcheck.check.checker import CheckResult, Unchecked
 from langcheck.check.suggestion import Option, Suggestion
 from langcheck.context.models import DocumentContext, Register
+from langcheck.documents.memory_store import MemoryDocumentStore
+from langcheck.documents.sessions import DocumentSessions
+from langcheck.limits.protocols import CheckLimiter
+from langcheck.limits.user_limiter import Unlimited, UserLimiter
 from langcheck.llm.structured import Failed
 from langcheck.taxonomy.kinds import ErrorKind, Operation
 from langcheck.text.models import Span
+from langcheck.text.regex_splitter import RegexSentenceSplitter
 
 CONTEXT = DocumentContext(
     summary="Notes.",
@@ -72,10 +77,24 @@ class FixedContexts:
         return Failed("no reply") if self.fail else CONTEXT
 
 
-def client_for(checker: RecordingChecker, contexts: FixedContexts) -> TestClient:
+def client_for(
+    checker: RecordingChecker, contexts: FixedContexts, *, limiter: CheckLimiter | None = None
+) -> TestClient:
     @asynccontextmanager
     async def services() -> AsyncGenerator[Services]:
-        yield Services(authenticator=KeyAuthenticator(), checker=checker, contexts=contexts)
+        yield Services(
+            authenticator=KeyAuthenticator(),
+            checker=checker,
+            contexts=contexts,
+            limiter=limiter or Unlimited(),
+            documents=DocumentSessions(
+                MemoryDocumentStore(),
+                checker=checker,
+                contexts=contexts,
+                splitter=RegexSentenceSplitter(),
+                limiter=Unlimited(),
+            ),
+        )
 
     return TestClient(build_app(services))
 
@@ -186,3 +205,15 @@ def test_context_returns_the_built_context_or_502(checker: RecordingChecker) -> 
     assert built.json()["register"] == "informal"
     assert failed.status_code == 502
     assert failed.json() == {"detail": "no reply"}
+
+
+def test_check_answers_429_when_the_user_is_over_the_limit(checker: RecordingChecker) -> None:
+    limiter = UserLimiter(max_in_flight=1, per_minute=1, clock=lambda: 100.0)
+    with client_for(checker, FixedContexts(), limiter=limiter) as client:
+        first = client.post("/check", json={"text": "Hi."}, headers=AUTH)
+        second = client.post("/check", json={"text": "Hi."}, headers=AUTH)
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.headers["Retry-After"] == "60"
+    assert len(checker.calls) == 1

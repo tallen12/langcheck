@@ -253,12 +253,16 @@ All endpoints except `/health` require authentication. `{uri}` is URL-encoded.
   hash, moves the offsets of existing suggestions in unchanged text, drops suggestions in
   changed text, and queues the changed chunks. Updates are debounced (for example 750 ms)
   so a typing user does not trigger a call per keystroke; a newer version cancels pending
-  work for the old one. Text patches instead of the full text can come later.
+  work for the old one. A stale base version gets 409 with the current version. Text
+  patches instead of the full text can come later.
 - `DELETE /documents/{uri}`: closes the session.
 - `POST /documents/{uri}/rename` with the new URI.
-- `GET /documents/{uri}/suggestions?version=N`: the current suggestions.
-- `GET /documents/{uri}/events` (Server-Sent Events): suggestions added and removed, and
-  check progress.
+- `GET /documents/{uri}/suggestions?version=N`: the current suggestions and check state;
+  409 with the current version when `N` is not current.
+- `GET /documents/{uri}/events` (Server-Sent Events): a `snapshot` event (version, check
+  state, all current suggestions) on every change, `closed` when the document closes or
+  is renamed, and a keep-alive comment every 15 s. Snapshots rather than added/removed
+  deltas, so a missed event never leaves a client showing stale suggestions.
 - `POST /documents/{uri}/suggestions/{sid}/accept` and `/dismiss`: accepting applies the
   chosen option and bumps the version; dismissing records the span and text so the same
   issue is not suggested again in this session.
@@ -297,7 +301,9 @@ one) plug in behind the same protocol.
 
 OIDC can be added later as another mode. TLS is handled by a reverse proxy (Caddy, nginx
 or Traefik) in front of uvicorn, documented with an example config. Each user gets a
-limit on LLM requests in flight and per minute, so one user cannot starve the others.
+limit on checks in flight and per minute (`limits.in_flight`, `limits.per_minute`), so
+one user cannot starve the others. A check counts once however many chunks it sends to
+the LLM; `/check` answers 429 with `Retry-After`, and a session check waits and retries.
 
 ### Process and state
 
@@ -378,8 +384,9 @@ it uses `llama3`. Every command takes `--config PATH`.
   `--apply` (not built yet) walks through suggestions interactively and writes the file.
   `--no-score` keeps the LLM's option order in a `--local` run.
   Exits 0 when clean, 1 with suggestions or unchecked spans, 2 when it cannot run.
-- `langcheck watch FILE [--local]`: watches the file (`watchfiles`) and prints new and
-  resolved suggestions as it changes.
+- `langcheck watch FILE [--local]`: watches the file (`watchfiles`) and prints new (`+`)
+  and resolved (`-`) suggestions as it changes. Each save is a one-shot check of the
+  whole file; the result cache keeps unchanged sentences away from the LLM.
 - `langcheck dict FILE [add|remove|list] [WORDS...]`: edit the document's dictionary.
 - `langcheck context FILE`: prints the document context, for tuning prompts.
 - `langcheck serve`, `langcheck lsp`, `langcheck admin add-user|revoke|users`: run the

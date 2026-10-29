@@ -24,6 +24,7 @@ from langcheck.auth.tokens import add_user
 from langcheck.cli.checking import ContextUnavailableError, open_local, open_remote
 from langcheck.cli.environment import CliEnvironment, process_environment
 from langcheck.cli.render import render_check, render_context
+from langcheck.cli.watching import watch_file
 from langcheck.database.schema import open_database
 from langcheck.llm.models import LLMError
 from langcheck.scoring.factory import ScorerUnavailableError
@@ -153,6 +154,33 @@ def build_app(env: CliEnvironment) -> App:
         return guarded(run)
 
     @app.command
+    def watch(
+        file: Path,
+        /,
+        *,
+        local: LocalOption = False,
+        config: ConfigOption = None,
+        server: ServerOption = None,
+        llm_url: LLMUrlOption = None,
+        llm_model: LLMModelOption = None,
+    ) -> int:
+        """Check FILE now and after every save, printing new (+) and resolved (-)
+        suggestions, until interrupted. Unchanged sentences come from the cache.
+        """
+
+        def run() -> int:
+            settings = client_settings(
+                config, {"server.url": server, "llm.base_url": llm_url, "llm.model": llm_model}
+            )
+            try:
+                asyncio.run(_watch(settings, file, local=local, env=env))
+            except KeyboardInterrupt:
+                env.out("stopped")
+            return CLEAN
+
+        return guarded(run)
+
+    @app.command
     def context(
         file: Path,
         /,
@@ -263,6 +291,16 @@ async def _check(
             return await checker.check(text)
     async with open_remote(settings, url, transport=env.transport) as client:
         return await client.check(text)
+
+
+async def _watch(settings: ClientSettings, path: Path, *, local: bool, env: CliEnvironment) -> None:
+    url = settings.server.url
+    if local or url is None:
+        async with open_local(settings, transport=env.transport) as checker:
+            await watch_file(path, check=checker.check, watcher=env.watcher, out=env.out)
+        return
+    async with open_remote(settings, url, transport=env.transport) as client:
+        await watch_file(path, check=client.check, watcher=env.watcher, out=env.out)
 
 
 async def _context(

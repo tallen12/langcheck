@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from langcheck.check.checker import CheckResult, Unchecked
 from langcheck.check.suggestion import Option, Scored, Suggestion, Unscored
 from langcheck.context.models import DocumentContext, Register
+from langcheck.documents.events import Snapshot
+from langcheck.documents.models import CheckState
 from langcheck.taxonomy.kinds import ErrorKind, Operation
 
 MAX_TEXT_LENGTH = 500_000
@@ -166,3 +168,88 @@ class HealthResponse(BaseModel):
     model_config = _BODY
 
     status: str = "ok"
+
+
+class UpdateRequest(BaseModel):
+    """The full text of a new version; ``base_version`` guards against lost updates."""
+
+    model_config = _BODY
+
+    text: Text
+    base_version: Annotated[int | None, Field(ge=0)] = None
+
+
+class VersionBody(BaseModel):
+    """The document's version after a change."""
+
+    model_config = _BODY
+
+    version: int
+
+
+class Conflict(BaseModel):
+    """What conflicted, and the ``current`` version."""
+
+    model_config = _BODY
+
+    message: str
+    current: int
+
+
+class ConflictBody(BaseModel):
+    """A 409 reply: the request named a version (or URI) that is not current."""
+
+    model_config = _BODY
+
+    detail: Conflict
+
+
+class RenameRequest(BaseModel):
+    """The document's new URI."""
+
+    model_config = _BODY
+
+    uri: Annotated[str, Field(min_length=1, max_length=2000)]
+
+
+class AcceptRequest(BaseModel):
+    """Which option to apply, and the version the client saw it in."""
+
+    model_config = _BODY
+
+    option: Annotated[int, Field(ge=0)] = 0
+    base_version: Annotated[int | None, Field(ge=0)] = None
+
+
+class AcceptBody(BaseModel):
+    """The edit to make: ``[start, end)`` of the previous version becomes
+    ``replacement``, giving ``version``.
+    """
+
+    model_config = _BODY
+
+    version: int
+    start: int
+    end: int
+    replacement: str
+
+
+class DocumentBody(BaseModel):
+    """The current version's suggestions and check state."""
+
+    model_config = _BODY
+
+    version: int
+    state: CheckState
+    suggestions: list[SuggestionBody]
+    unchecked: list[UncheckedBody]
+
+    @classmethod
+    def of(cls, snapshot: Snapshot) -> DocumentBody:
+        """The body for ``snapshot``."""
+        return cls(
+            version=snapshot.version,
+            state=snapshot.state,
+            suggestions=[SuggestionBody.of(s) for s in snapshot.suggestions],
+            unchecked=[UncheckedBody.of(u) for u in snapshot.unchecked],
+        )

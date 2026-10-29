@@ -1,6 +1,8 @@
+import asyncio
 import json
 import re
 import sys
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -86,11 +88,24 @@ class RecordingRunner:
         self.runs.append((app, host, port))
 
 
+class EditingWatcher:
+    """A ``FileWatcher`` that writes each scripted text to the file, then reports it."""
+
+    def __init__(self, edits: list[str]) -> None:
+        self.edits = edits
+
+    async def changes(self, path: Path) -> AsyncIterator[None]:
+        for text in self.edits:
+            await asyncio.to_thread(path.write_text, text, encoding="utf-8")
+            yield None
+
+
 @dataclass
 class Cli:
     tmp_path: Path
     network: Network = field(default_factory=Network)
     runner: RecordingRunner = field(default_factory=RecordingRunner)
+    watcher: EditingWatcher = field(default_factory=lambda: EditingWatcher([]))
     out: list[str] = field(default_factory=list)
     err: list[str] = field(default_factory=list)
 
@@ -101,6 +116,7 @@ class Cli:
             out=self.out.append,
             err=self.err.append,
             runner=self.runner,
+            watcher=self.watcher,
             clock=lambda: datetime(2026, 10, 28, tzinfo=UTC),
             transport=httpx.MockTransport(self.network),
         )
@@ -254,3 +270,21 @@ def test_check_reports_a_configured_scorer_without_pytorch(
     assert "just setup cpu" in cli.err[-1]
 
     assert cli("check", str(notes), "--no-score") == FOUND
+
+
+def test_watch_reports_new_and_resolved_suggestions(cli: Cli, notes: Path) -> None:
+    cli.watcher.edits = [
+        "Read the book.\n\nAll good here.\n",
+        "Read the book.\n\nAll teh good here.\n",
+    ]
+
+    assert cli("watch", str(notes)) == CLEAN
+
+    assert cli.out == [
+        f"+ {notes}:1:6: Spelling: 'teh' -> 'the'",
+        "1 suggestion",
+        f"- {notes}: Spelling: 'teh' resolved",
+        "0 suggestions",
+        f"+ {notes}:3:5: Spelling: 'teh' -> 'the'",
+        "1 suggestion",
+    ]

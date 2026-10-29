@@ -10,7 +10,8 @@ from pathlib import Path
 import httpx
 
 from langcheck.api.startup import utc_now
-from langcheck.cli.protocols import ServerRunner
+from langcheck.cli.file_watcher import WatchfilesWatcher
+from langcheck.cli.protocols import FileWatcher, ServerRunner
 from langcheck.cli.uvicorn_runner import UvicornRunner
 
 
@@ -27,6 +28,7 @@ class CliEnvironment:
     out: Callable[[str], None]
     err: Callable[[str], None]
     runner: ServerRunner
+    watcher: FileWatcher
     clock: Callable[[], datetime]
     transport: httpx.AsyncBaseTransport | None = None
 
@@ -39,5 +41,6 @@ def process_environment() -> CliEnvironment:
         out=print,
         err=lambda line: print(line, file=sys.stderr),
         runner=UvicornRunner(),
+        watcher=WatchfilesWatcher(),
         clock=utc_now,
     )
