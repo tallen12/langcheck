@@ -521,8 +521,10 @@ second feature that lands after it.
 
 - **Default LLM model.** Any OpenAI-compatible server works; which model to recommend is
   decided by M6 on accuracy and latency (live editing needs about 1–3 s per chunk).
-- **Sentence splitter:** `pysbd`, a regex splitter or spaCy. Decide in M1 on quality of
-  offsets for dialogue and abbreviations.
+- **Sentence splitter.** M1 uses a dependency-free regex splitter behind the
+  `SentenceSplitter` protocol: it keeps exact offsets and handles abbreviations,
+  initials and dialogue tags. Swap in `pysbd` or spaCy if M6 finds its boundaries hurt
+  accuracy.
 - **Does PLL scoring pay for its latency?** M6 measures it per kind. If the CoLA
   classifier alone does as well, drop PLL.
 - **Whole-sentence options vs span options.** The plan scores span replacements inside
