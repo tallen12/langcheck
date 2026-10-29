@@ -96,7 +96,7 @@ at what others have checked.
 
 ## LLM contract
 
-The prompt (versioned, kept in `prompts/`) tells the model to:
+The prompt (versioned, kept in `src/langcheck/prompts/` so it ships inside the package) tells the model to:
 
 - fix only spelling and grammar, using the kinds below; leave style, word choice that is
   not wrong, and content alone;
@@ -437,9 +437,9 @@ langcheck/
     lsp/          # LSP proxy to the service (pygls)
     libreoffice/  # UNO proofreader; standard library and uno only
     cli/          # `langcheck` commands; composition root with api startup
+    prompts/      # versioned prompt templates (package data)
   editors/
     vscode/       # TypeScript extension that starts `langcheck lsp`
-  prompts/        # versioned prompt templates
   tests/
     unit/         # mirrors src/langcheck/, in process with fakes
     integration/  # real HTTP app, SQLite, models, LLM (markers)
