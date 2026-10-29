@@ -393,7 +393,9 @@ it uses `llama3`. Every command takes `--config PATH`.
 - `langcheck watch FILE [--local]`: watches the file (`watchfiles`) and prints new (`+`)
   and resolved (`-`) suggestions as it changes. Each save is a one-shot check of the
   whole file; the result cache keeps unchanged sentences away from the LLM.
-- `langcheck dict FILE [add|remove|list] [WORDS...]`: edit the document's dictionary.
+- `langcheck dict FILE [add|remove|list] [WORDS...]`: edit the document's dictionary on
+  the server, keyed by the file's URI; `check` and `watch` against a server use it.
+  Dictionaries live on the server, so `--local` runs do not use them yet.
 - `langcheck context FILE`: prints the document context, for tuning prompts.
 - `langcheck serve`, `langcheck lsp`, `langcheck admin add-user|revoke|users`: run the
   service, the LSP proxy, and manage API keys.
