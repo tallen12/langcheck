@@ -3,6 +3,7 @@
 from collections.abc import Callable, Sequence
 
 import pytest
+from transformers import PreTrainedTokenizerFast
 
 from langcheck.auth.models import User, UserExistsError
 from langcheck.llm.models import ChatMessage, ChatOptions, LLMError
@@ -106,3 +107,36 @@ class SyncTableScorer:
     def batches(self) -> list[list[ScoredText]]:
         """Every batch scored so far."""
         return self.table.batches
+
+
+TINY_CORPUS = [
+    "The dog sleeps in the garden every morning.",
+    "A cat walked to the park and the river.",
+    "They are going home. Their house is old. I think they're right.",
+] * 20
+
+
+@pytest.fixture(scope="session")
+def tiny_tokenizer() -> PreTrainedTokenizerFast:
+    """A RoBERTa-style byte-level BPE tokenizer trained on a few sentences, so scorer
+    tests run without downloading a model.
+    """
+    from tokenizers import ByteLevelBPETokenizer
+
+    bpe = ByteLevelBPETokenizer()
+    bpe.train_from_iterator(
+        TINY_CORPUS,
+        vocab_size=600,
+        min_frequency=1,
+        special_tokens=["<s>", "<pad>", "</s>", "<unk>", "<mask>"],
+    )
+    return PreTrainedTokenizerFast(
+        tokenizer_object=bpe,
+        bos_token="<s>",
+        cls_token="<s>",
+        eos_token="</s>",
+        sep_token="</s>",
+        pad_token="<pad>",
+        unk_token="<unk>",
+        mask_token="<mask>",
+    )

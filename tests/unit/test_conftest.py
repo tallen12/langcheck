@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import Callable, Sequence
 
 import pytest
+from transformers import PreTrainedTokenizerFast
 
 from langcheck.auth.models import User, UserExistsError
 from langcheck.auth.protocols import ApiKeyStore
@@ -72,3 +73,13 @@ def test_table_scorers_look_scores_up_and_record_batches() -> None:
     assert sync_contract.score(texts) == [0.0, 2.0]
     assert asynchronous.batches == [texts]
     assert blocking.batches == [texts]
+
+
+def test_tiny_tokenizer_has_roberta_special_tokens_and_offsets(
+    tiny_tokenizer: PreTrainedTokenizerFast,
+) -> None:
+    encoded = tiny_tokenizer("The dog sleeps.", return_offsets_mapping=True)
+
+    assert tiny_tokenizer.mask_token_id is not None
+    assert tiny_tokenizer.pad_token_id is not None
+    assert len(encoded["input_ids"]) == len(encoded["offset_mapping"])
