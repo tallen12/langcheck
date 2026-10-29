@@ -27,7 +27,6 @@ CONTEXT = DocumentContext(
     dialect="en-GB",
     glossary=("Bilbo",),
     notes="Past tense, third person.",
-    version=2,
 )
 
 

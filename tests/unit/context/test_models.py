@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from langcheck.context.models import DocumentContext, Register
 
 
@@ -7,7 +9,15 @@ def test_empty_context_says_nothing() -> None:
     assert (context.summary, context.dialect, context.notes) == ("", "", "")
     assert context.glossary == ()
     assert context.register is Register.NEUTRAL
-    assert context.version == 0
+
+
+def test_version_is_a_fingerprint_of_the_content() -> None:
+    context = DocumentContext.empty()
+
+    assert context.version == DocumentContext.empty().version
+    assert len(context.version) == 16
+    assert replace(context, glossary=("Bilbo",)).version != context.version
+    assert replace(context, register=Register.FORMAL).version != context.version
 
 
 def test_register_values() -> None:
