@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -58,3 +59,38 @@ def test_unreachable_service() -> None:
 
     with pytest.raises(ServiceError, match=r"cannot reach http://svc\.test/check"):
         asyncio.run(client_for(httpx.MockTransport(refuse)).check("Hi."))
+
+
+def test_dictionary_calls_encode_the_uri_and_return_the_words() -> None:
+    seen: list[httpx.Request] = []
+
+    def service(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"words": ["Bilbo"]})
+
+    client = client_for(httpx.MockTransport(service))
+
+    async def run() -> list[list[str]]:
+        return [
+            await client.words("file:///a b.md"),
+            await client.add_words("file:///a b.md", ["Bilbo"]),
+            await client.remove_words("file:///a b.md", ["Shire"]),
+        ]
+
+    assert asyncio.run(run()) == [["Bilbo"]] * 3
+    assert [r.method for r in seen] == ["GET", "POST", "DELETE"]
+    assert seen[0].url.raw_path == b"/documents/file%3A%2F%2F%2Fa%20b.md/dictionary"
+    assert seen[0].content == b""
+    assert json.loads(seen[2].content) == {"words": ["Shire"]}
+
+
+def test_check_sends_the_document_uri() -> None:
+    seen: list[httpx.Request] = []
+
+    def service(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"suggestions": [], "unchecked": [], "context": CONTEXT})
+
+    asyncio.run(client_for(httpx.MockTransport(service)).check("Hi.", uri="file:///a.md"))
+
+    assert json.loads(seen[0].content)["uri"] == "file:///a.md"

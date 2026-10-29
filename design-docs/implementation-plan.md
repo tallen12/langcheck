@@ -90,7 +90,7 @@ For each changed chunk of a document:
    the clients watching it.
 
 Results are cached per user and sentence: key = hash(sentence, neighbouring sentences,
-context version, model, prompt version, dictionary). The context version is a fingerprint
+context version, model, prompt version, ranker). The context version is a fingerprint
 of its content. An unchanged sentence is never sent again. The cache is
 not shared between users: hits across users would be rare, and a shared cache would hint
 at what others have checked.
@@ -227,8 +227,11 @@ long document, its first N and last N paragraphs plus a sample):
 - `notes`: tense and person of narration, other conventions.
 
 It is versioned. It is rebuilt when a set share of the document (for example 20%) has
-changed since the last build, or when the client asks. Words the user adds to the
-document's dictionary are passed to the builder and the prompt too.
+changed since the last build, or when the client asks. Words in the document's
+dictionary are passed to the builder, so they join the glossary of the next build. They
+are not sent with each chunk: the checker drops issues on dictionary words after the
+result cache (pipeline step 6), so adding or removing a word never re-sends cached
+sentences to the LLM.
 
 ## Service
 
@@ -266,7 +269,9 @@ All endpoints except `/health` require authentication. `{uri}` is URL-encoded.
 - `POST /documents/{uri}/suggestions/{sid}/accept` and `/dismiss`: accepting applies the
   chosen option and bumps the version; dismissing records the span and text so the same
   issue is not suggested again in this session.
-- `GET`, `POST`, `DELETE /documents/{uri}/dictionary`: list, add and remove words.
+- `GET`, `POST`, `DELETE /documents/{uri}/dictionary`: list, add and remove words
+  (`{"words": [...]}`; every call returns the sorted dictionary). Works whether or not
+  the document is open; an open document is re-checked, from the cache, at once.
 - `POST /check`: stateless one-shot check of a text (with an optional URI to use its
   dictionary), for the CLI and simple clients. Without a context in the request, the server builds one
   first and returns it with the suggestions.
@@ -280,7 +285,8 @@ All endpoints except `/health` require authentication. `{uri}` is URL-encoded.
 `remove(user, uri, words)`, `rename(user, old_uri, new_uri)`. The server config picks an
 implementation:
 
-- `memory`: for tests and throwaway servers;
+- `memory`: for tests and throwaway servers (unsaved `untitled:` documents always use
+  it, and their words move to the configured store when they are saved under a real URI);
 - `sql` (default): SQLAlchemy 2, SQLite file by default, Postgres by changing the URL.
   Migrations with Alembic once the schema first changes.
 
@@ -387,7 +393,9 @@ it uses `llama3`. Every command takes `--config PATH`.
 - `langcheck watch FILE [--local]`: watches the file (`watchfiles`) and prints new (`+`)
   and resolved (`-`) suggestions as it changes. Each save is a one-shot check of the
   whole file; the result cache keeps unchanged sentences away from the LLM.
-- `langcheck dict FILE [add|remove|list] [WORDS...]`: edit the document's dictionary.
+- `langcheck dict FILE [add|remove|list] [WORDS...]`: edit the document's dictionary on
+  the server, keyed by the file's URI; `check` and `watch` against a server use it.
+  Dictionaries live on the server, so `--local` runs do not use them yet.
 - `langcheck context FILE`: prints the document context, for tuning prompts.
 - `langcheck serve`, `langcheck lsp`, `langcheck admin add-user|revoke|users`: run the
   service, the LSP proxy, and manage API keys.

@@ -13,6 +13,7 @@ from langcheck.auth.models import User
 from langcheck.check.checker import CheckResult
 from langcheck.check.suggestion import Option, Suggestion, suggestion_id
 from langcheck.context.models import DocumentContext
+from langcheck.dictionary.memory_store import MemoryDictionaryStore
 from langcheck.documents.events import Closed, Snapshot
 from langcheck.documents.memory_store import MemoryDocumentStore
 from langcheck.documents.models import CheckState
@@ -39,7 +40,8 @@ class TypoChecker:
         dictionary: Collection[str] = (),
     ) -> CheckResult:
         found = []
-        start = text.find("teh")
+        # Like the real checker, issues on dictionary words are dropped.
+        start = -1 if "teh" in dictionary else text.find("teh")
         while start != -1:
             span = Span(start, start + 3)
             found.append(
@@ -64,16 +66,20 @@ class NoContexts:
         return DocumentContext.empty()
 
 
-def make_client(*, keepalive: float = 15.0) -> TestClient:
+def make_client(
+    *, keepalive: float = 15.0, dictionary: MemoryDictionaryStore | None = None
+) -> TestClient:
     async def no_wait(seconds: float) -> None:
         return None
 
+    words = dictionary if dictionary is not None else MemoryDictionaryStore()
     sessions = DocumentSessions(
         MemoryDocumentStore(),
         checker=TypoChecker(),
         contexts=NoContexts(),
         splitter=RegexSentenceSplitter(),
         limiter=Unlimited(),
+        dictionary=words,
         sleep=no_wait,
     )
 
@@ -81,7 +87,9 @@ def make_client(*, keepalive: float = 15.0) -> TestClient:
         return User(request.headers.get("x-user", "ana"))
 
     app = FastAPI()
-    app.include_router(document_router(lambda: sessions, caller, keepalive=keepalive))
+    app.include_router(
+        document_router(lambda: sessions, lambda: words, caller, keepalive=keepalive)
+    )
     return TestClient(app)
 
 
@@ -183,3 +191,43 @@ def test_sse_formats_snapshots_and_closed() -> None:
     assert snapshot.endswith("\n\n")
     assert json.loads(snapshot.split("data: ", 1)[1])["state"] == "checking"
     assert sse(Closed()) == "event: closed\ndata: {}\n\n"
+
+
+def test_dictionary_words_hide_suggestions_and_come_back_when_removed() -> None:
+    with make_client() as client:
+        client.put(PATH, json={"text": "Read teh book."})
+        assert len(wait_done(client).suggestions) == 1
+        added = client.post(f"{PATH}/dictionary", json={"words": ["teh", "Bilbo"]})
+        hidden = wait_done(client)
+        listed = client.get(f"{PATH}/dictionary")
+        removed = client.request("DELETE", f"{PATH}/dictionary", json={"words": ["teh"]})
+        back = wait_done(client)
+        still_open = client.get(f"{PATH}/suggestions")
+
+    assert added.json() == {"words": ["Bilbo", "teh"]}
+    assert hidden.suggestions == []
+    assert listed.json() == {"words": ["Bilbo", "teh"]}
+    assert removed.json() == {"words": ["Bilbo"]}
+    assert len(back.suggestions) == 1
+    assert still_open.status_code == 200
+
+
+def test_dictionaries_work_for_documents_that_are_not_open() -> None:
+    with make_client() as client:
+        added = client.post(f"{PATH}/dictionary", json={"words": ["Shire"]})
+        blank = client.post(f"{PATH}/dictionary", json={"words": ["  "]})
+        empty = client.post(f"{PATH}/dictionary", json={"words": []})
+
+    assert added.json() == {"words": ["Shire"]}
+    assert (blank.status_code, empty.status_code) == (422, 422)
+
+
+def test_renaming_a_document_moves_its_dictionary() -> None:
+    dictionary = MemoryDictionaryStore()
+    with make_client(dictionary=dictionary) as client:
+        client.put(PATH, json={"text": "Hi."})
+        client.post(f"{PATH}/dictionary", json={"words": ["Shire"]})
+        client.post(f"{PATH}/rename", json={"uri": "file:///home/ana/new.md"})
+
+    assert dictionary.words("ana", URI) == frozenset()
+    assert dictionary.words("ana", "file:///home/ana/new.md") == {"Shire"}

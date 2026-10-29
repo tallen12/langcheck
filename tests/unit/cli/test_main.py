@@ -66,6 +66,7 @@ class Network:
 
     requests: list[httpx.Request] = field(default_factory=list)
     service_status: int = 200
+    words: set[str] = field(default_factory=set)
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -73,6 +74,12 @@ class Network:
             return llm_reply(request)
         if self.service_status != 200:
             return httpx.Response(self.service_status, json={"detail": "invalid API key"})
+        if request.url.path.endswith("/dictionary"):
+            if request.method == "POST":
+                self.words |= set(json.loads(request.content)["words"])
+            elif request.method == "DELETE":
+                self.words -= set(json.loads(request.content)["words"])
+            return httpx.Response(200, json={"words": sorted(self.words)})
         if request.url.path == "/check":
             return httpx.Response(200, json=SERVICE_RESPONSE)
         return httpx.Response(200, json=CONTEXT)
@@ -175,6 +182,7 @@ def test_check_uses_the_server_with_its_api_key(
     [request] = cli.network.requests
     assert str(request.url) == "http://svc.test/check"
     assert request.headers["Authorization"] == "Bearer lc_key"
+    assert json.loads(request.content)["uri"] == notes.resolve().as_uri()
     assert "Spelling: 'teh' -> 'the'" in cli.output
 
 
@@ -288,3 +296,26 @@ def test_watch_reports_new_and_resolved_suggestions(cli: Cli, notes: Path) -> No
         f"+ {notes}:3:5: Spelling: 'teh' -> 'the'",
         "1 suggestion",
     ]
+
+
+def test_dict_lists_adds_and_removes_words_on_the_server(cli: Cli, notes: Path) -> None:
+    server = ["--server", "http://svc.test"]
+
+    assert cli("dict", str(notes), "add", "Bilbo", "Shire", *server) == CLEAN
+    assert cli.out == ["Bilbo", "Shire"]
+    cli.out.clear()
+    assert cli("dict", str(notes), "remove", "Shire", *server) == CLEAN
+    assert cli("dict", str(notes), *server) == CLEAN
+
+    assert cli.out == ["Bilbo", "Bilbo"]
+    uri = notes.resolve().as_uri()
+    assert all(r.url.path == f"/documents/{uri}/dictionary" for r in cli.network.requests)
+    assert [r.method for r in cli.network.requests] == ["POST", "DELETE", "GET"]
+
+
+def test_dict_needs_a_server_and_words(cli: Cli, notes: Path) -> None:
+    assert cli("dict", str(notes)) == FAILED
+    assert "needs a server" in cli.err[-1]
+    assert cli("dict", str(notes), "add", "--server", "http://svc.test") == FAILED
+    assert "needs at least one word" in cli.err[-1]
+    assert cli.network.requests == []

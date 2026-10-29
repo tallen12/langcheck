@@ -18,8 +18,12 @@ from langcheck.api.schemas import (
     RenameRequest,
     UpdateRequest,
     VersionBody,
+    WordsBody,
+    WordsRequest,
 )
 from langcheck.auth.models import User
+from langcheck.dictionary.protocols import DictionaryStore
+from langcheck.dictionary.words import InvalidWordError
 from langcheck.documents.events import Closed, DocumentEvent, Snapshot
 from langcheck.documents.models import DocumentKey
 from langcheck.documents.protocols import DocumentService
@@ -33,15 +37,39 @@ type Authenticate = Callable[..., Coroutine[object, object, User]]
 
 def document_router(
     documents: Callable[[], DocumentService],
+    dictionary: Callable[[], DictionaryStore],
     authenticate: Authenticate,
     *,
     keepalive: float = KEEPALIVE_SECONDS,
 ) -> APIRouter:
-    """The router; ``documents`` returns the running service, ``authenticate`` is the
-    dependency that identifies the caller.
+    """The router; ``documents`` and ``dictionary`` return the running services,
+    ``authenticate`` is the dependency that identifies the caller.
     """
     router = APIRouter(prefix="/documents")
     Caller = Annotated[User, Depends(authenticate)]
+
+    # Registered before the document routes: "/{uri:path}" would also match these.
+    @router.get("/{uri:path}/dictionary")
+    async def words(uri: str, caller: Caller) -> WordsBody:
+        found = await asyncio.to_thread(dictionary().words, caller.name, uri)
+        return WordsBody(words=sorted(found))
+
+    @router.post("/{uri:path}/dictionary")
+    async def add_words(uri: str, body: WordsRequest, caller: Caller) -> WordsBody:
+        try:
+            await asyncio.to_thread(dictionary().add, caller.name, uri, body.words)
+        except InvalidWordError as error:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
+        return await _dictionary_changed(uri, caller)
+
+    @router.delete("/{uri:path}/dictionary")
+    async def remove_words(uri: str, body: WordsRequest, caller: Caller) -> WordsBody:
+        await asyncio.to_thread(dictionary().remove, caller.name, uri, body.words)
+        return await _dictionary_changed(uri, caller)
+
+    async def _dictionary_changed(uri: str, caller: User) -> WordsBody:
+        await documents().dictionary_changed(DocumentKey(caller.name, uri))
+        return await words(uri, caller)
 
     @router.put("/{uri:path}", responses={409: {"model": ConflictBody}})
     async def update(uri: str, body: UpdateRequest, caller: Caller) -> VersionBody:

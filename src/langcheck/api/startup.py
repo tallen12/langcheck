@@ -8,6 +8,7 @@ from typing import assert_never
 
 import httpx
 from fastapi import FastAPI
+from sqlalchemy import Engine
 
 from langcheck.api.app import Services, build_app
 from langcheck.auth.authenticators import ApiKeyAuthenticator, TrustingAuthenticator
@@ -18,6 +19,10 @@ from langcheck.check.memory_cache import MemoryResultCache
 from langcheck.check.resolve import ValidationPolicy
 from langcheck.context.builder import ContextBuilder
 from langcheck.database.schema import open_database
+from langcheck.dictionary.memory_store import MemoryDictionaryStore
+from langcheck.dictionary.protocols import DictionaryStore
+from langcheck.dictionary.routing import UntitledInMemory
+from langcheck.dictionary.sql_store import SqlDictionaryStore
 from langcheck.documents.memory_store import MemoryDocumentStore
 from langcheck.documents.sessions import DocumentSessions
 from langcheck.limits.user_limiter import UserLimiter
@@ -25,7 +30,7 @@ from langcheck.llm.async_openai_chat import AsyncOpenAIChatClient
 from langcheck.llm.models import ChatOptions
 from langcheck.scoring.factory import AdapterLoader, load_adapter, open_ranker
 from langcheck.settings.loading import ServerSettings
-from langcheck.settings.models import AuthMode
+from langcheck.settings.models import AuthMode, DictionaryBackend
 from langcheck.text.regex_splitter import RegexSentenceSplitter
 
 
@@ -75,12 +80,14 @@ async def open_services(
                 per_minute=settings.limits.per_minute,
                 clock=time.monotonic,
             )
+            dictionary = _dictionary(settings, engine)
             documents = DocumentSessions(
                 MemoryDocumentStore(),
                 checker=checker,
                 contexts=contexts,
                 splitter=splitter,
                 limiter=limiter,
+                dictionary=dictionary,
                 debounce=settings.checker.debounce,
                 refresh_share=settings.checker.context_refresh_share,
             )
@@ -91,6 +98,7 @@ async def open_services(
                     contexts=contexts,
                     limiter=limiter,
                     documents=documents,
+                    dictionary=dictionary,
                 )
             finally:
                 await documents.aclose()
@@ -113,3 +121,14 @@ def _authenticator(settings: ServerSettings, store: SqlApiKeyStore) -> Authentic
             return TrustingAuthenticator(proxy_user_header=settings.auth.proxy_user_header)
         case unreachable:
             assert_never(unreachable)
+
+
+def _dictionary(settings: ServerSettings, engine: Engine) -> DictionaryStore:
+    match settings.dictionary.backend:
+        case DictionaryBackend.SQL:
+            persistent: DictionaryStore = SqlDictionaryStore(engine)
+        case DictionaryBackend.MEMORY:
+            persistent = MemoryDictionaryStore()
+        case unreachable:
+            assert_never(unreachable)
+    return UntitledInMemory(persistent, scratch=MemoryDictionaryStore())

@@ -55,6 +55,10 @@ class DocumentService(Protocol):
         """Hide a suggestion for the rest of the session."""
         ...
 
+    async def dictionary_changed(self, key: DocumentKey) -> bool:
+        """Re-check the open document after its dictionary changed."""
+        ...
+
     async def close(self, key: DocumentKey) -> bool:
         """Close the document."""
         ...

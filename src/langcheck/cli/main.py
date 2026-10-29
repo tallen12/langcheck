@@ -9,7 +9,7 @@ import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from importlib.metadata import version
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import yaml
 from cyclopts import App, Parameter
@@ -144,7 +144,8 @@ def build_app(env: CliEnvironment) -> App:
                 },
             )
             text = file.read_text(encoding="utf-8")
-            response = asyncio.run(_check(settings, text, local=local, env=env))
+            uri = file.resolve().as_uri()
+            response = asyncio.run(_check(settings, text, uri=uri, local=local, env=env))
             if as_json:
                 env.out(response.model_dump_json(by_alias=True, indent=2))
             else:
@@ -173,9 +174,41 @@ def build_app(env: CliEnvironment) -> App:
                 config, {"server.url": server, "llm.base_url": llm_url, "llm.model": llm_model}
             )
             try:
-                asyncio.run(_watch(settings, file, local=local, env=env))
+                uri = file.resolve().as_uri()
+                asyncio.run(_watch(settings, file, uri=uri, local=local, env=env))
             except KeyboardInterrupt:
                 env.out("stopped")
+            return CLEAN
+
+        return guarded(run)
+
+    @app.command(name="dict")
+    def dictionary(
+        file: Path,
+        action: Literal["list", "add", "remove"] = "list",
+        /,
+        *words: str,
+        config: ConfigOption = None,
+        server: ServerOption = None,
+    ) -> int:
+        """List, add or remove words in FILE's dictionary on the server.
+
+        Words in a document's dictionary are never flagged in it. Dictionaries are kept
+        by the server, so this needs one configured (server.url or --server).
+        """
+
+        def run() -> int:
+            settings = client_settings(config, {"server.url": server})
+            url = settings.server.url
+            if url is None:
+                env.err("langcheck: dict needs a server; set server.url or pass --server")
+                return FAILED
+            if action != "list" and not words:
+                env.err(f"langcheck: dict {action} needs at least one word")
+                return FAILED
+            uri = file.resolve().as_uri()
+            for word in asyncio.run(_dictionary(settings, url, uri, action, words, env=env)):
+                env.out(word)
             return CLEAN
 
         return guarded(run)
@@ -283,24 +316,49 @@ def build_app(env: CliEnvironment) -> App:
 
 
 async def _check(
-    settings: ClientSettings, text: str, *, local: bool, env: CliEnvironment
+    settings: ClientSettings, text: str, *, uri: str, local: bool, env: CliEnvironment
 ) -> CheckResponse:
     url = settings.server.url
     if local or url is None:
         async with open_local(settings, transport=env.transport) as checker:
             return await checker.check(text)
     async with open_remote(settings, url, transport=env.transport) as client:
-        return await client.check(text)
+        return await client.check(text, uri=uri)
 
 
-async def _watch(settings: ClientSettings, path: Path, *, local: bool, env: CliEnvironment) -> None:
+async def _watch(
+    settings: ClientSettings, path: Path, *, uri: str, local: bool, env: CliEnvironment
+) -> None:
     url = settings.server.url
     if local or url is None:
         async with open_local(settings, transport=env.transport) as checker:
             await watch_file(path, check=checker.check, watcher=env.watcher, out=env.out)
         return
     async with open_remote(settings, url, transport=env.transport) as client:
-        await watch_file(path, check=client.check, watcher=env.watcher, out=env.out)
+
+        async def check(text: str) -> CheckResponse:
+            return await client.check(text, uri=uri)
+
+        await watch_file(path, check=check, watcher=env.watcher, out=env.out)
+
+
+async def _dictionary(
+    settings: ClientSettings,
+    url: str,
+    uri: str,
+    action: Literal["list", "add", "remove"],
+    words: Sequence[str],
+    *,
+    env: CliEnvironment,
+) -> list[str]:
+    async with open_remote(settings, url, transport=env.transport) as client:
+        match action:
+            case "list":
+                return await client.words(uri)
+            case "add":
+                return await client.add_words(uri, words)
+            case "remove":
+                return await client.remove_words(uri, words)
 
 
 async def _context(
