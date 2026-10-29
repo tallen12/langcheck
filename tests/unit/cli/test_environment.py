@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from langcheck.cli.environment import process_environment
+from langcheck.cli.stdio_runner import StdioRunner
 from langcheck.cli.uvicorn_runner import UvicornRunner
 
 
@@ -10,4 +11,5 @@ def test_process_environment_uses_the_real_process() -> None:
     assert env.cwd == Path.cwd()
     assert isinstance(env.runner, UvicornRunner)
     assert env.transport is None
+    assert isinstance(env.language_servers, StdioRunner)
     assert env.clock().tzinfo is not None

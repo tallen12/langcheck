@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 from fastapi import FastAPI
+from pygls.lsp.server import LanguageServer
 
 from langcheck.cli.environment import CliEnvironment
 from langcheck.cli.main import CLEAN, FAILED, FOUND, build_app, nested_overrides
@@ -95,6 +96,16 @@ class RecordingRunner:
         self.runs.append((app, host, port))
 
 
+@dataclass
+class RecordingLanguageServers:
+    """Records the language server it was asked to run."""
+
+    servers: list[LanguageServer] = field(default_factory=list)
+
+    def run(self, server: LanguageServer) -> None:
+        self.servers.append(server)
+
+
 class EditingWatcher:
     """A ``FileWatcher`` that writes each scripted text to the file, then reports it."""
 
@@ -112,6 +123,9 @@ class Cli:
     tmp_path: Path
     network: Network = field(default_factory=Network)
     runner: RecordingRunner = field(default_factory=RecordingRunner)
+    language_servers: RecordingLanguageServers = field(
+        default_factory=lambda: RecordingLanguageServers()
+    )
     watcher: EditingWatcher = field(default_factory=lambda: EditingWatcher([]))
     out: list[str] = field(default_factory=list)
     err: list[str] = field(default_factory=list)
@@ -124,6 +138,7 @@ class Cli:
             err=self.err.append,
             runner=self.runner,
             watcher=self.watcher,
+            language_servers=self.language_servers,
             clock=lambda: datetime(2026, 10, 28, tzinfo=UTC),
             transport=httpx.MockTransport(self.network),
         )
@@ -319,3 +334,12 @@ def test_dict_needs_a_server_and_words(cli: Cli, notes: Path) -> None:
     assert cli("dict", str(notes), "add", "--server", "http://svc.test") == FAILED
     assert "needs at least one word" in cli.err[-1]
     assert cli.network.requests == []
+
+
+def test_lsp_runs_a_language_server_for_the_configured_server(cli: Cli) -> None:
+    assert cli("lsp") == FAILED
+    assert "lsp needs a server" in cli.err[-1]
+
+    assert cli("lsp", "--server", "http://svc.test") == CLEAN
+    [server] = cli.language_servers.servers
+    assert server.name == "langcheck"

@@ -6,7 +6,8 @@ LLM, unreadable file).
 """
 
 import asyncio
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, Literal
@@ -14,6 +15,7 @@ from typing import Annotated, Literal
 import yaml
 from cyclopts import App, Parameter
 from pydantic import ValidationError
+from pygls.lsp.server import LanguageServer
 
 from langcheck.api.client import ServiceError
 from langcheck.api.schemas import CheckResponse, ContextBody
@@ -27,6 +29,9 @@ from langcheck.cli.render import render_check, render_context
 from langcheck.cli.watching import watch_file
 from langcheck.database.schema import open_database
 from langcheck.llm.models import LLMError
+from langcheck.lsp.models import Diagnostic
+from langcheck.lsp.proxy import LspProxy
+from langcheck.lsp.server import build_server, log_to, publish_to
 from langcheck.scoring.factory import ScorerUnavailableError
 from langcheck.settings.loading import (
     ClientSettings,
@@ -253,6 +258,34 @@ def build_app(env: CliEnvironment) -> App:
         def run() -> int:
             settings = server_settings(config, {"http.host": host, "http.port": port})
             env.runner.run(create_app(settings), host=settings.http.host, port=settings.http.port)
+            return CLEAN
+
+        return guarded(run)
+
+    @app.command
+    def lsp(*, config: ConfigOption = None, server: ServerOption = None) -> int:
+        """Run the language server on stdin and stdout, for editors (VS Code, Neovim,
+        Helix, Zed). It forwards open documents to the configured server and shows its
+        suggestions as diagnostics with quick fixes.
+        """
+
+        def run() -> int:
+            settings = client_settings(config, {"server.url": server})
+            url = settings.server.url
+            if url is None:
+                env.err("langcheck: lsp needs a server; set server.url or pass --server")
+                return FAILED
+
+            @asynccontextmanager
+            async def open_proxy(ls: LanguageServer) -> AsyncGenerator[LspProxy]:
+                async with open_remote(settings, url, transport=env.transport) as client:
+
+                    async def publish(uri: str, diagnostics: list[Diagnostic]) -> None:
+                        await publish_to(ls, uri, diagnostics)
+
+                    yield LspProxy(client, publish=publish, log=lambda line: log_to(ls, line))
+
+            env.language_servers.run(build_server(open_proxy))
             return CLEAN
 
         return guarded(run)
