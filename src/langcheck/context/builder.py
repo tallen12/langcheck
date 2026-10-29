@@ -63,12 +63,13 @@ class ContextBuilder:
         messages = context_messages(sample(text, max_paragraphs=self._max_paragraphs))
         match await complete_structured(self._llm, messages, ContextReply, options=self._options):
             case Parsed(value=reply):
-                glossary = dict.fromkeys([*reply.glossary, *sorted(dictionary)])
+                terms = (t.strip() for t in [*reply.glossary, *sorted(dictionary)])
+                glossary = dict.fromkeys(terms)
                 return DocumentContext(
                     summary=reply.summary.strip(),
                     register=reply.writing_register,
                     dialect=reply.dialect.strip(),
-                    glossary=tuple(term for term in glossary if term.strip()),
+                    glossary=tuple(term for term in glossary if term),
                     notes=reply.notes.strip(),
                 )
             case Failed() as failed:
