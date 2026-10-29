@@ -1,17 +1,32 @@
-from langcheck.libreoffice.uno_types import TextDocument
+from langcheck.libreoffice.uno_types import document_text
+
+
+class Text:
+    def __init__(self, value: object) -> None:
+        self.value = value
+
+    def getString(self) -> object:
+        return self.value
 
 
 class Document:
-    def getText(self) -> Document:
-        return self
+    def __init__(self, text: object, url: object = "") -> None:
+        self.text = text
+        self.url = url
 
-    def getString(self) -> str:
-        return "Hi."
+    def getText(self) -> Text:
+        return Text(self.text)
 
-    def getURL(self) -> str:
-        return ""
+    def getURL(self) -> object:
+        return self.url
 
 
-def test_text_documents_are_recognised_at_run_time() -> None:
-    assert isinstance(Document(), TextDocument)
-    assert not isinstance(object(), TextDocument)
+def test_reads_writer_documents_by_their_methods() -> None:
+    assert document_text(Document("Hi.", "file:///a.odt")) == ("file:///a.odt", "Hi.")
+    assert document_text(Document("Hi.")) == ("", "Hi.")
+
+
+def test_other_components_are_not_documents() -> None:
+    assert document_text(object()) is None
+    assert document_text(Document(7)) is None
+    assert document_text(Document("Hi.", None)) is None

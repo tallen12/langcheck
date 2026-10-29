@@ -4,13 +4,15 @@
 proofreader looks the paragraph up in the whole-document text the service last checked.
 """
 
+from __future__ import annotations
+
 import threading
 from dataclasses import dataclass
 
 from langcheck.libreoffice.schema import Suggestion
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class ParagraphError:
     """A suggestion relative to the start of one paragraph."""
 
@@ -22,7 +24,7 @@ class ParagraphError:
     suggestion_id: str
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Checked:
     """A document's text and the suggestions the service made for exactly that text."""
 

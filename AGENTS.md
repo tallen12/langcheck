@@ -28,6 +28,9 @@ global interpreter.
 - All required checks: `just check`
 - Build the VS Code extension (`editors/vscode/`, TypeScript): `just vscode` (needs
   Node.js 22; type-checks, bundles and packages `langcheck.vsix`)
+- Build the LibreOffice extension: `just libreoffice` (checks `langcheck.libreoffice` on
+  Python 3.8, then builds `dist/langcheck.oxt`); `just test-libreoffice` runs it in a real
+  LibreOffice
 - Remove finished worktrees and merged branches: `just prune-worktrees` (`--fetch`,
   `--dry-run`)
 - Render diagrams: `just diagrams` (needs Graphviz). Diagrams live in

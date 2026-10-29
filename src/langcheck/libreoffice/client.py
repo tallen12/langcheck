@@ -1,17 +1,20 @@
 """The langcheck service over ``urllib``, for LibreOffice's Python."""
 
+from __future__ import annotations
+
 import json
 import urllib.error
 import urllib.request
-from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Callable
 from urllib.parse import quote
 
 from langcheck.libreoffice.schema import DocumentState, parse_document, parse_version
 
 DEFAULT_TIMEOUT = 30.0
 
-type Opener = Callable[[urllib.request.Request, float], bytes]
+# typing.Callable: this alias is evaluated at run time, on Python 3.8 too.
+Opener = Callable[[urllib.request.Request, float], bytes]
 """Sends a request with a timeout and returns the body; raises ``OSError`` on failure."""
 
 
@@ -19,7 +22,7 @@ class ServiceError(Exception):
     """The service could not be reached or answered with an error."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Connection:
     """Where the service is. ``api_key`` is left out of ``repr``."""
 

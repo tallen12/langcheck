@@ -437,11 +437,22 @@ settings or the key change. Built into a
 ### LibreOffice: proofreader extension
 
 `src/langcheck/libreoffice/` is a UNO `XProofreader` implementation, packaged as an
-`.oxt` by `just libreoffice`. LibreOffice runs it in its bundled Python, which cannot
-see our virtualenv, so this subpackage imports only the standard library and `uno`: it
-talks to the service with `urllib` and parses JSON by hand into its own small types. A
-check in `scripts/check_layout.py` enforces the import rule. Unit tests run under our
-Python with a fake `uno` module.
+`.oxt` by `just libreoffice` from the package and the static files in
+`editors/libreoffice/` (registration for English locales, a settings schema, manifest).
+LibreOffice runs it in its bundled Python, which cannot see our virtualenv, so this
+subpackage imports only the standard library and `uno`: it talks to the service with
+`urllib` and parses JSON by hand into its own small types. A check in
+`scripts/check_layout.py` enforces the import rule. That Python is as old as 3.8 in
+LibreOffice 7.x on Windows and macOS, so the package keeps to 3.8 syntax (ruff's target
+for it is `py38`) and `just libreoffice` imports it under Python 3.8 first. Unit tests
+run under our Python with a fake `uno` module; `just test-libreoffice` (and a CI job)
+installs the built `.oxt` in a real headless LibreOffice and checks the suggestion
+reaches Writer's proofreading API.
+
+The server comes from `LANGCHECK_SERVER__URL` and `LANGCHECK_SERVER__API_KEY`, or from
+the extension's configuration (`org.langcheck.libreoffice.Settings`, in Expert
+Configuration). Unsaved documents get an `untitled:` URI per document, keyed by its
+`RuntimeUID` because pyuno wraps the same document in a new object on every lookup.
 
 `doProofreading` is called per paragraph and must answer from that call. The extension:
 

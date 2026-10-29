@@ -5,6 +5,8 @@ the service from this thread. Only the latest text of each document is kept: edi
 while a check runs replace the queued text instead of queueing more work.
 """
 
+from __future__ import annotations
+
 import threading
 import time
 from collections.abc import Callable

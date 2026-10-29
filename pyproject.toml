@@ -67,6 +67,11 @@ target-version = "py314"
 line-length = 100
 extend-exclude = ["design-docs"]
 
+[tool.ruff.per-file-target-version]
+# LibreOffice runs this package in its own Python: 3.8 in LibreOffice 7.x on Windows and
+# macOS. `just libreoffice` imports it under Python 3.8 to check.
+"src/langcheck/libreoffice/**" = "py38"
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ANN", "ASYNC", "RUF", "PTH"]
 
@@ -79,10 +84,11 @@ all = "error"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-m", "not models and not llm"]
+addopts = ["-m", "not models and not llm and not libreoffice"]
 markers = [
     "models: downloads a pretrained Hugging Face model",
     "llm: needs a running LLM server",
+    "libreoffice: drives a real LibreOffice (soffice with Python uno)",
 ]
 
 [tool.coverage.run]

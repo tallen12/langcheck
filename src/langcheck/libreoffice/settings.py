@@ -3,6 +3,8 @@ LibreOffice configuration (Tools > Options > Advanced > Expert Configuration,
 ``org.langcheck.libreoffice.Settings``).
 """
 
+from __future__ import annotations
+
 from collections.abc import Mapping
 
 from langcheck.libreoffice.client import Connection

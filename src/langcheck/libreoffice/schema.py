@@ -1,5 +1,7 @@
 """The service's JSON, parsed by hand into small frozen types (no Pydantic here)."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 
@@ -7,7 +9,7 @@ class SchemaError(ValueError):
     """The service sent JSON that does not have the expected shape."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Suggestion:
     """A fix for ``text[start:end]``, options best first."""
 
@@ -20,7 +22,7 @@ class Suggestion:
     options: tuple[str, ...]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class DocumentState:
     """The service's view of one document version."""
 

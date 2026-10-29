@@ -5,11 +5,14 @@ document to the worker; when the worker's results change a document's suggestion
 component fires ``PROOFREAD_AGAIN`` and LibreOffice asks again for every paragraph.
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import threading
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
+from typing import Callable, Optional
 
 import unohelper
 from com.sun.star.beans import PropertyValue
@@ -29,7 +32,7 @@ from langcheck.libreoffice.settings import connection_from
 from langcheck.libreoffice.uno_types import (
     ComponentContext,
     LinguServiceEventListener,
-    TextDocument,
+    document_text,
 )
 from langcheck.libreoffice.worker import CheckWorker
 
@@ -43,7 +46,8 @@ PROOFREADING = 4
 LANGUAGES = ("en",)
 UNTITLED = "untitled:"
 
-type WorkerFactory = Callable[[DocumentCache, Callable[[str], None]], CheckWorker | None]
+# typing.Callable and Optional: this alias is evaluated at run time, on Python 3.8 too.
+WorkerFactory = Callable[[DocumentCache, Callable[[str], None]], Optional[CheckWorker]]
 """Makes the running worker on first use; ``None`` when no server is configured."""
 
 
@@ -68,7 +72,7 @@ class LangcheckProofreader(
         self._make_worker = workers if workers is not None else self._default_worker
         self._worker: CheckWorker | None = None
         self._started = False
-        self._untitled: dict[int, str] = {}
+        self._untitled: dict[str, str] = {}
 
     # XServiceInfo, XServiceName, XServiceDisplayName
 
@@ -193,19 +197,21 @@ class LangcheckProofreader(
         components = desktop.getComponents().createEnumeration()
         while components.hasMoreElements():
             component = components.nextElement()
-            if not isinstance(component, TextDocument):
-                continue
-            whole = component.getText().getString()
-            if paragraph in whole:
-                return self._uri_of(component), whole
+            found = document_text(component)
+            if found is not None and paragraph in found[1]:
+                url, whole = found
+                return self._uri_of(component, url), whole
         return None
 
-    def _uri_of(self, document: TextDocument) -> str:
-        url = document.getURL()
+    def _uri_of(self, component: object, url: str) -> str:
         if url:
             return url
-        # Unsaved documents get a stable temporary URI, so nothing about them persists.
-        return self._untitled.setdefault(id(document), f"{UNTITLED}{uuid.uuid4()}")
+        # Unsaved documents get a temporary URI, so nothing about them persists. pyuno
+        # wraps the same document in a new object on every lookup, so the document's
+        # RuntimeUID (stable for the process) identifies it, not the wrapper.
+        runtime_uid: object = getattr(component, "RuntimeUID", "")
+        key = runtime_uid if isinstance(runtime_uid, str) and runtime_uid else str(id(component))
+        return self._untitled.setdefault(key, f"{UNTITLED}{uuid.uuid4()}")
 
     def _default_worker(
         self, cache: DocumentCache, on_changed: Callable[[str], None]

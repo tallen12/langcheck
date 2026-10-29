@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The server settings, editable in Tools > Options > Advanced > Expert Configuration
+     (search "org.langcheck"). LANGCHECK_SERVER__URL and LANGCHECK_SERVER__API_KEY win. -->
+<oor:component-schema oor:name="Settings" oor:package="org.langcheck.libreoffice" xml:lang="en-US"
+    xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <component>
+    <group oor:name="Server">
+      <prop oor:name="Url" oor:type="xs:string">
+        <value></value>
+      </prop>
+      <prop oor:name="ApiKey" oor:type="xs:string">
+        <value></value>
+      </prop>
+    </group>
+  </component>
+</oor:component-schema>

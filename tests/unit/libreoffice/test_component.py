@@ -31,6 +31,7 @@ class Document:
     def __init__(self, text: str, url: str = "") -> None:
         self.text = text
         self.url = url
+        self.RuntimeUID = ""
 
     def getText(self) -> Text:
         return Text(self.text)
@@ -194,12 +195,17 @@ def test_answers_from_the_cache_and_asks_libreoffice_to_check_again(
 
 def test_unsaved_documents_get_one_stable_untitled_uri(component: ModuleType) -> None:
     service = Service()
-    document = Document(TEXT)
-    proofreader, workers = make(component, [document], service=service)
+    # pyuno returns a new wrapper on every lookup; the RuntimeUID stays the same.
+    first, again = Document(TEXT), Document(TEXT + " More.")
+    first.RuntimeUID = again.RuntimeUID = "7"
+    documents: list[object] = [first]
+    proofreader, workers = make(component, documents, service=service)
 
     proofread(proofreader, "Read teh book.")
     workers[0].run_once()
-    proofread(proofreader, "Second paragraph.")
+    documents[0] = again
+    proofread(proofreader, "Read teh book.")
+    workers[0].run_once()
 
     uris = {uri for uri, _ in service.puts}
     [uri] = uris

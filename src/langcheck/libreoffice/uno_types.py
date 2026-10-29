@@ -4,29 +4,10 @@ UNO objects are dynamic; these protocols name only the calls the extension makes
 the rest of the code is type-checked and tests can pass plain fakes.
 """
 
+from __future__ import annotations
+
 from collections.abc import Sequence
-from typing import Protocol, runtime_checkable
-
-
-class TextRange(Protocol):
-    """``com.sun.star.text.XTextRange``."""
-
-    def getString(self) -> str:
-        """The text."""
-        ...
-
-
-@runtime_checkable
-class TextDocument(Protocol):
-    """A Writer document: ``XTextDocument`` and ``XModel``."""
-
-    def getText(self) -> TextRange:
-        """The document body."""
-        ...
-
-    def getURL(self) -> str:
-        """The file URL, or empty for an unsaved document."""
-        ...
+from typing import Protocol
 
 
 class Enumeration(Protocol):
@@ -92,3 +73,24 @@ class LinguServiceEventListener(Protocol):
     def processLinguServiceEvent(self, event: object) -> None:
         """React to a linguistic service event."""
         ...
+
+
+def document_text(component: object) -> tuple[str, str] | None:
+    """The URL (empty when unsaved) and full text of a Writer document, or ``None`` for
+    any other component.
+
+    Duck-typed with ``getattr``: pyuno objects break ``isinstance`` checks against
+    runtime-checkable protocols (the spike's integration test caught this).
+    """
+    get_text = getattr(component, "getText", None)
+    get_url = getattr(component, "getURL", None)
+    if not callable(get_text) or not callable(get_url):
+        return None
+    get_string = getattr(get_text(), "getString", None)
+    if not callable(get_string):
+        return None
+    url: object = get_url()
+    text: object = get_string()
+    if not isinstance(url, str) or not isinstance(text, str):
+        return None
+    return url, text
