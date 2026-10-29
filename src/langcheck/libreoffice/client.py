@@ -9,7 +9,12 @@ from dataclasses import dataclass, field
 from typing import Callable
 from urllib.parse import quote
 
-from langcheck.libreoffice.schema import DocumentState, parse_document, parse_version
+from langcheck.libreoffice.schema import (
+    DocumentState,
+    SchemaError,
+    parse_document,
+    parse_version,
+)
 
 DEFAULT_TIMEOUT = 30.0
 
@@ -53,11 +58,19 @@ class ServiceClient:
     def put_document(self, uri: str, text: str) -> int:
         """Open or update the document; the service's version."""
         body = json.dumps({"text": text}).encode("utf-8")
-        return parse_version(self._call("PUT", _document_path(uri), body))
+        reply = self._call("PUT", _document_path(uri), body)
+        try:
+            return parse_version(reply)
+        except SchemaError as error:
+            raise _unexpected(uri, error) from error
 
     def document(self, uri: str) -> DocumentState:
         """The current version's suggestions and check state."""
-        return parse_document(self._call("GET", f"{_document_path(uri)}/suggestions", None))
+        reply = self._call("GET", f"{_document_path(uri)}/suggestions", None)
+        try:
+            return parse_document(reply)
+        except SchemaError as error:
+            raise _unexpected(uri, error) from error
 
     def _call(self, method: str, path: str, body: bytes | None) -> object:
         url = f"{self._connection.url.rstrip('/')}/{path}"
@@ -81,6 +94,12 @@ class ServiceClient:
             msg = f"{url} sent invalid JSON"
             raise ServiceError(msg) from error
         return data
+
+
+def _unexpected(uri: str, error: SchemaError) -> ServiceError:
+    # A malformed reply is a service failure like any other: the worker logs it and
+    # carries on, where a stray SchemaError would end its thread for good.
+    return ServiceError(f"unexpected reply for {uri}: {error}")
 
 
 def _document_path(uri: str) -> str:

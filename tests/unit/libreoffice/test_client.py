@@ -63,6 +63,16 @@ def test_failures_become_service_errors(reply: bytes | Exception, message: str) 
         client.document("file:///a.odt")
 
 
+@pytest.mark.parametrize("reply", [b'{"version": "4"}', b"[]"])
+def test_malformed_replies_become_service_errors(reply: bytes) -> None:
+    client = ServiceClient(Connection("http://svc.test"), opener=Recorder(reply))
+
+    with pytest.raises(ServiceError, match="unexpected reply"):
+        client.put_document("file:///a.odt", "Hi.")
+    with pytest.raises(ServiceError, match="unexpected reply"):
+        client.document("file:///a.odt")
+
+
 def test_urlopen_reads_a_local_file(tmp_path: Path) -> None:
     path = tmp_path / "reply.json"
     path.write_text('{"version": 1}', encoding="utf-8")
