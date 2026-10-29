@@ -90,7 +90,7 @@ For each changed chunk of a document:
    the clients watching it.
 
 Results are cached per user and sentence: key = hash(sentence, neighbouring sentences,
-context version, model, prompt version, dictionary). The context version is a fingerprint
+context version, model, prompt version, ranker). The context version is a fingerprint
 of its content. An unchanged sentence is never sent again. The cache is
 not shared between users: hits across users would be rare, and a shared cache would hint
 at what others have checked.
@@ -227,8 +227,11 @@ long document, its first N and last N paragraphs plus a sample):
 - `notes`: tense and person of narration, other conventions.
 
 It is versioned. It is rebuilt when a set share of the document (for example 20%) has
-changed since the last build, or when the client asks. Words the user adds to the
-document's dictionary are passed to the builder and the prompt too.
+changed since the last build, or when the client asks. Words in the document's
+dictionary are passed to the builder, so they join the glossary of the next build. They
+are not sent with each chunk: the checker drops issues on dictionary words after the
+result cache (pipeline step 6), so adding or removing a word never re-sends cached
+sentences to the LLM.
 
 ## Service
 

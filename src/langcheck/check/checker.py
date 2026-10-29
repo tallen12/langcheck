@@ -9,7 +9,7 @@ from langcheck.check.chunk import DEFAULT_MAX_WORDS, Chunk, chunk_sentences
 from langcheck.check.prompt import PROMPT_VERSION, check_messages
 from langcheck.check.protocols import OptionRanker, ResultCache
 from langcheck.check.reply import CheckReply
-from langcheck.check.resolve import Rejection, ValidationPolicy, resolve
+from langcheck.check.resolve import Rejection, ValidationPolicy, resolve, touches_terms
 from langcheck.check.suggestion import Suggestion
 from langcheck.context.models import DocumentContext
 from langcheck.llm.models import ChatOptions
@@ -31,8 +31,8 @@ class Unchecked:
 @dataclass(frozen=True, slots=True)
 class CheckResult:
     """The suggestions for a text in document order, what could not be checked, and, for
-    metrics, the issues rejected during resolution and the suggestions the scoring policy
-    filtered out (both empty for cached sentences).
+    metrics, the issues rejected during resolution (empty for cached sentences) and the
+    suggestions filtered out by the scoring policy or the dictionary.
     """
 
     suggestions: tuple[Suggestion, ...]
@@ -86,13 +86,16 @@ class Checker:
         context: DocumentContext,
         dictionary: Collection[str] = (),
     ) -> CheckResult:
-        """Check ``text`` for ``user``; ``dictionary`` words are never flagged."""
+        """Check ``text`` for ``user``; issues touching ``dictionary`` words are dropped.
+
+        The dictionary is applied after the cache rather than sent to the LLM, so adding
+        or removing a word never makes cached sentences go back to the LLM.
+        """
         segmentation = segment(text, splitter=self._splitter)
         setting = CacheSetting(
             model=self._model,
             prompt_version=PROMPT_VERSION,
             context_version=context.version,
-            dictionary=tuple(dictionary),
             ranker=self._ranker.name,
         )
         keys = _sentence_keys(segmentation.sentences, user=user, setting=setting)
@@ -106,16 +109,16 @@ class Checker:
                 misses.add(sentence.id)
             else:
                 suggestions += hit.placed_at(sentence.span.start)
-        outcomes = await self._check_chunks(
-            segmentation, misses, keys, context=context, dictionary=dictionary
-        )
+        outcomes = await self._check_chunks(segmentation, misses, keys, context=context)
         for outcome in outcomes:
             suggestions += outcome.suggestions
+        kept = [s for s in suggestions if not touches_terms(text, s.span, dictionary)]
+        in_dictionary = [s for s in suggestions if touches_terms(text, s.span, dictionary)]
         return CheckResult(
-            suggestions=tuple(sorted(suggestions, key=lambda s: s.span.start)),
+            suggestions=tuple(sorted(kept, key=lambda s: s.span.start)),
             unchecked=tuple(u for outcome in outcomes for u in outcome.unchecked),
             rejections=tuple(r for outcome in outcomes for r in outcome.rejections),
-            filtered=tuple(f for outcome in outcomes for f in outcome.filtered),
+            filtered=(*(f for outcome in outcomes for f in outcome.filtered), *in_dictionary),
         )
 
     async def _check_chunks(
@@ -125,15 +128,11 @@ class Checker:
         keys: dict[str, CacheKey],
         *,
         context: DocumentContext,
-        dictionary: Collection[str],
     ) -> list[_ChunkOutcome]:
         chunks = chunk_sentences(segmentation, only=sentence_ids, max_words=self._max_words)
         return list(
             await asyncio.gather(
-                *(
-                    self._check_chunk(chunk, keys, context=context, dictionary=dictionary)
-                    for chunk in chunks
-                )
+                *(self._check_chunk(chunk, keys, context=context) for chunk in chunks)
             )
         )
 
@@ -143,9 +142,8 @@ class Checker:
         keys: dict[str, CacheKey],
         *,
         context: DocumentContext,
-        dictionary: Collection[str],
     ) -> _ChunkOutcome:
-        messages = check_messages(chunk, context, dictionary=dictionary)
+        messages = check_messages(chunk, context)
         match await complete_structured(self._llm, messages, CheckReply, options=self._options):
             case Failed(reason=reason):
                 unchecked = tuple(Unchecked(s.span, reason) for s in chunk.sentences)
@@ -155,7 +153,7 @@ class Checker:
                     reply,
                     {s.id: s for s in chunk.sentences},
                     policy=self._policy,
-                    intentional={*context.glossary, *dictionary},
+                    intentional=context.glossary,
                 )
                 ranking = await self._ranker.rank(resolution.suggestions, chunk.sentences)
                 for sentence in chunk.sentences:

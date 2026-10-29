@@ -122,7 +122,7 @@ def _resolve_issue(
     relative = find_occurrence(sentence.text, issue.original, issue.occurrence)
     if relative is None:
         return RejectionReason.NOT_FOUND
-    if _touches_term(sentence.text, relative, intentional):
+    if touches_terms(sentence.text, relative, intentional):
         return RejectionReason.INTENTIONAL
     span = relative.shifted(sentence.span.start)
     if any(span.overlaps(d) for d in dismissed):
@@ -187,7 +187,8 @@ def _normalise_with_positions(text: str) -> tuple[str, list[int]]:
     return "".join(characters), positions
 
 
-def _touches_term(text: str, span: Span, terms: Iterable[str]) -> bool:
+def touches_terms(text: str, span: Span, terms: Iterable[str]) -> bool:
+    """Whether ``span`` of ``text`` overlaps a whole-word occurrence of any term."""
     for term in terms:
         pattern = rf"(?<!\w){re.escape(term)}(?!\w)"
         for match in re.finditer(pattern, text):

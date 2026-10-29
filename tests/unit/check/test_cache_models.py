@@ -5,7 +5,7 @@ from langcheck.check.suggestion import Option, Suggestion, suggestion_id
 from langcheck.taxonomy.kinds import ErrorKind, Operation
 from langcheck.text.models import Span
 
-SETTING = CacheSetting("m", "check-v1", "ctx", ("Bilbo", "Shire"), "llm-order")
+SETTING = CacheSetting("m", "check-v1", "ctx", "llm-order")
 
 
 def key_for(**changes: object) -> str:
@@ -37,16 +37,14 @@ def test_key_depends_on_text_neighbours_and_setting() -> None:
         replace(SETTING, model="other"),
         replace(SETTING, prompt_version="check-v2"),
         replace(SETTING, context_version="ctx2"),
-        replace(SETTING, dictionary=("Bilbo",)),
         replace(SETTING, ranker="pll"),
     ]:
         assert key_for(setting=setting) != base
 
 
-def test_key_ignores_dictionary_order_and_scopes_by_user() -> None:
-    reordered = replace(SETTING, dictionary=("Shire", "Bilbo"))
+def test_key_is_scoped_by_user() -> None:
     key = cache_key(user="ana", sentence="x", previous="", following="", setting=SETTING)
-    other = cache_key(user="ben", sentence="x", previous="", following="", setting=reordered)
+    other = cache_key(user="ben", sentence="x", previous="", following="", setting=SETTING)
 
     assert key.digest == other.digest
     assert key != other

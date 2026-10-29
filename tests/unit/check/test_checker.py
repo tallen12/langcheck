@@ -126,7 +126,22 @@ def test_dictionary_and_glossary_words_are_never_flagged() -> None:
 
     assert result.suggestions == ()
     assert {r.reason for r in result.rejections} == {RejectionReason.INTENTIONAL}
-    assert "Glossary (never flag): Bilbo, teh" in llm.chats[0][-1].content
+    assert [s.original for s in result.filtered] == ["teh"]
+    assert "Glossary (never flag): Bilbo\n" in llm.chats[0][-1].content
+
+
+def test_changing_the_dictionary_reuses_the_cache() -> None:
+    llm = ScriptedLLM([proofreader])
+    checker = make_checker(llm)
+
+    plain = check(checker, "Read teh book.")
+    with_word = check(checker, "Read teh book.", dictionary={"teh"})
+    without_word = check(checker, "Read teh book.", dictionary=set())
+
+    assert len(llm.chats) == 1
+    assert [s.original for s in plain.suggestions] == ["teh"]
+    assert with_word.suggestions == ()
+    assert without_word.suggestions == plain.suggestions
 
 
 def test_failed_chunks_are_reported_unchecked_and_not_cached() -> None:
