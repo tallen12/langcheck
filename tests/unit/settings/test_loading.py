@@ -84,6 +84,22 @@ def test_masked_dump_hides_secrets() -> None:
     assert dumped["server"] == {"url": None, "api_key": "**********", "timeout": 300.0}
 
 
+def test_masked_dump_hides_passwords_in_urls() -> None:
+    settings = load_settings(
+        ServerSettings,
+        overrides={"database": {"url": "postgresql://app:p4ss@db.test:5432/langcheck"}},
+        yaml_data={},
+    )
+
+    dumped = masked_dump(settings)
+
+    assert "p4ss" not in str(dumped)
+    assert dumped["database"] == {"url": "postgresql://app:**********@db.test:5432/langcheck"}
+    assert masked_dump(load_settings(ServerSettings, overrides={}, yaml_data={}))["database"] == {
+        "url": "sqlite:///langcheck.db"
+    }
+
+
 def test_resolve_config_path_prefers_the_option_then_the_environment(tmp_path: Path) -> None:
     option = tmp_path / "option.yaml"
     from_env = tmp_path / "env.yaml"
