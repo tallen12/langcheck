@@ -1,4 +1,4 @@
-from langcheck.scoring.policy import OFF, KindPolicy, ScoringPolicy
+from langcheck.scoring.policy import OFF, PLL_DEFAULT, KindPolicy, ScoringPolicy
 from langcheck.taxonomy.kinds import ErrorKind
 
 
@@ -15,3 +15,11 @@ def test_filtered_kinds_need_an_option_that_beats_the_margin() -> None:
     assert policy.keeps(ErrorKind.PUNCTUATION, 0.6)
     assert not policy.keeps(ErrorKind.PUNCTUATION, 0.5)
     assert policy.keeps(ErrorKind.SPELLING, -1.0)
+
+
+def test_the_pll_default_filters_only_word_boundary_and_punctuation() -> None:
+    filtered = {kind for kind in ErrorKind if PLL_DEFAULT.for_kind(kind).filter}
+
+    assert filtered == {ErrorKind.WORD_BOUNDARY, ErrorKind.PUNCTUATION}
+    assert PLL_DEFAULT.keeps(ErrorKind.PUNCTUATION, -0.2)
+    assert not PLL_DEFAULT.keeps(ErrorKind.PUNCTUATION, -0.3)

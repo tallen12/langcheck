@@ -21,8 +21,8 @@ OFF = KindPolicy()
 
 @dataclass(frozen=True, slots=True)
 class ScoringPolicy:
-    """Per-kind filtering. Every kind starts with filtering off; the M6 evaluation turns
-    it on for kinds where it raises precision without losing much recall.
+    """Per-kind filtering. Filtering is off for a kind unless configured; ``PLL_DEFAULT``
+    turns it on where the M6 evaluation found it raises precision without losing recall.
     """
 
     kinds: Mapping[ErrorKind, KindPolicy] = field(default_factory=dict)
@@ -35,3 +35,15 @@ class ScoringPolicy:
         """Whether an issue of ``kind`` whose best option has ``best_delta`` is kept."""
         policy = self.for_kind(kind)
         return not policy.filter or best_delta > policy.margin
+
+
+PLL_DEFAULT = ScoringPolicy(
+    {
+        # Tuned with `langcheck evaluate tune` on 1,000 BEA-2019 dev sentences (qwen3:8b,
+        # distilroberta-base) and checked on 200 held-out CoNLL-2014 sentences, where
+        # it dropped 28 wrong suggestions and no correct ones. The margins are PLL deltas,
+        # so they do not carry over to other scorers.
+        ErrorKind.WORD_BOUNDARY: KindPolicy(filter=True, margin=-0.0722),
+        ErrorKind.PUNCTUATION: KindPolicy(filter=True, margin=-0.2736),
+    }
+)

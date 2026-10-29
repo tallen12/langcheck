@@ -200,9 +200,11 @@ Two adapters, usable alone or combined:
 Ranking always applies: `delta = score(candidate) - score(original)`, options sorted by
 delta. Filtering is per error kind: a `ScoringPolicy` maps each `ErrorKind` to
 `filter: bool` and a `margin`, and drops an issue only when filtering is on for its kind
-and no option beats the original by the margin. Every kind starts with filtering off.
-M6 turns it on for the kinds where it raises precision without losing much recall; PLL
-is expected to help least on Punctuation, Capitalization and SentenceBoundary.
+and no option beats the original by the margin. M6 turns filtering on for the kinds
+where it raises precision without losing much recall. With PLL alone and no
+`scorer.policy` configured, the default filters WordBoundary (margin -0.072) and
+Punctuation (margin -0.274), as tuned in M6; other scorers filter nothing by default,
+because the margins are PLL deltas, and `scorer.policy: {}` turns filtering off.
 
 The scorer is CPU or GPU bound. The service runs it in one worker thread behind a small
 batching queue, so it never blocks the event loop. PyTorch builds (cpu, cuda, rocm) are
@@ -583,6 +585,24 @@ needs 20 scored suggestions before it is tuned (`--min-suggestions`); on 200 CoN
 sentences, smaller kinds "gained" up to 0.3 F0.5 from noise. The comparison with contcheck's tagger
 needs contcheck's own run on the same sets and is not part of this command.
 
+Results (qwen3:8b through Ollama with reasoning off, prompt check-v1, PLL with
+distilroberta-base):
+
+- Tuning on 1,000 BEA-2019 dev sentences (overall F0.5 0.239 unfiltered) turned on
+  filtering for WordBoundary (margin -0.072: drops 65 wrong suggestions and 2 correct)
+  and Punctuation (margin -0.274: drops 53 wrong and 0 correct). Each raised overall
+  F0.5 by about 0.008. Every other kind gained nothing or had fewer than 20 suggestions.
+- On 200 held-out CoNLL-2014 test sentences, without filtering, F0.5 was 0.267 without
+  a scorer and 0.292 and 0.251 in two PLL runs. The 0.04 gap between those two runs is
+  run-to-run LLM variation, so single runs compare loosely. With the BEA-tuned policy,
+  a live run scored 0.310 (P 0.363, R 0.197, 27 suggestions filtered). Applied offline to
+  the same LLM output as the 0.251 run, the policy dropped 28 wrong suggestions and no
+  correct ones, for 0.273. These two filters are the PLL default (see Scoring options).
+- Latency per chunk was p50 1.8 s and p90 3.3 s without a scorer, and p50 2.2–2.7 s and
+  p90 5.4 s with PLL on CPU.
+- Validation rejected 63 of the LLM's issues on CoNLL-2014 (200 sentences) and 357 on
+  BEA-2019 (1,000 sentences), mostly as too large or as no change.
+
 ## Features
 
 Each milestone is built as one or more features (see the `git-workflow` skill): one
@@ -609,13 +629,16 @@ second feature that lands after it.
 ## Open questions
 
 - **Default LLM model.** Any OpenAI-compatible server works; which model to recommend is
-  decided by M6 on accuracy and latency (live editing needs about 1–3 s per chunk).
+  decided by M6 on accuracy and latency (live editing needs about 1–3 s per chunk). Only
+  qwen3:8b has been evaluated so far: F0.5 0.24–0.31 at p50 1.8 s per chunk.
 - **Sentence splitter.** M1 uses a dependency-free regex splitter behind the
   `SentenceSplitter` protocol: it keeps exact offsets and handles abbreviations,
   initials and dialogue tags. Swap in `pysbd` or spaCy if M6 finds its boundaries hurt
   accuracy.
 - **Does PLL scoring pay for its latency?** M6 measures it per kind. If the CoLA
-  classifier alone does as well, drop PLL.
+  classifier alone does as well, drop PLL. So far PLL pays only through filtering
+  (WordBoundary and Punctuation, about +0.02 F0.5 on held-out data), at about 1 s more
+  per chunk at p50 and 2 s at p90 on CPU. CoLA has not been evaluated.
 - **Whole-sentence options vs span options.** The plan scores span replacements inside
   the original sentence. If the LLM often needs several linked edits (agreement across a
   clause), allow an issue to carry a multi-span edit.
