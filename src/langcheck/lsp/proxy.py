@@ -41,6 +41,9 @@ class _Open:
     texts: dict[int, str] = field(default_factory=dict)
     snapshot: DocumentBody | None = None
     diagnostics: list[Diagnostic] = field(default_factory=list)
+    # The text ``diagnostics`` were placed on; their ranges hold only while the editor
+    # still has exactly this text.
+    shown: str | None = None
     watcher: asyncio.Task[None] | None = None
 
 
@@ -93,10 +96,12 @@ class LspProxy:
 
     def code_actions(self, uri: str, selection: Range) -> list[CodeAction]:
         """Quick fixes for the diagnostics that overlap ``selection``, options in ranked
-        order, then "Add to dictionary" and "Dismiss".
+        order, then "Add to dictionary" and "Dismiss". None while the editor's text has
+        moved on from the text the diagnostics were placed on: their edits would replace
+        the wrong characters.
         """
         document = self._open.get(uri)
-        if document is None:
+        if document is None or document.shown != document.text:
             return []
         actions: list[CodeAction] = []
         for diagnostic in document.diagnostics:
@@ -198,6 +203,7 @@ class LspProxy:
         if text is None:
             return
         document.diagnostics = diagnostics_for(text, snapshot)
+        document.shown = text
         await self._publish(uri, document.diagnostics)
 
 
