@@ -52,6 +52,9 @@ class ThreadedScorer:
         if self._worker is not None:
             self._worker.cancel()
             await asyncio.gather(self._worker, return_exceptions=True)
+        # Fail what the worker never reached, so no caller waits forever.
+        while not self._queue.empty():
+            _fail(self._queue.get_nowait(), _stopped())
         if self._executor is not None:
             await asyncio.to_thread(self._executor.shutdown, wait=True)
         self._worker = None
@@ -71,29 +74,42 @@ class ThreadedScorer:
     async def _work(self) -> None:
         loop = asyncio.get_running_loop()
         # A request that did not fit the last batch starts the next one, keeping order.
-        carried: _Request | None = None
-        while True:
-            batch = [carried if carried is not None else await self._queue.get()]
-            carried = None
-            size = len(batch[0].texts)
-            while not self._queue.empty():
-                waiting = self._queue.get_nowait()
-                if size + len(waiting.texts) > self._max_batch:
-                    carried = waiting
-                    break
-                batch.append(waiting)
-                size += len(waiting.texts)
-            texts = [text for request in batch for text in request.texts]
-            try:
-                scores = await loop.run_in_executor(self._executor, self._scorer.score, texts)
-            except Exception as error:  # handed to every waiting caller, never dropped
+        carried: list[_Request] = []
+        batch: list[_Request] = []
+        try:
+            while True:
+                batch = [carried.pop() if carried else await self._queue.get()]
+                size = len(batch[0].texts)
+                while not self._queue.empty():
+                    waiting = self._queue.get_nowait()
+                    if size + len(waiting.texts) > self._max_batch:
+                        carried.append(waiting)
+                        break
+                    batch.append(waiting)
+                    size += len(waiting.texts)
+                texts = [text for request in batch for text in request.texts]
+                try:
+                    scores = await loop.run_in_executor(self._executor, self._scorer.score, texts)
+                except Exception as error:  # handed to every waiting caller, never dropped
+                    for request in batch:
+                        _fail(request, error)
+                    continue
+                start = 0
                 for request in batch:
+                    end = start + len(request.texts)
                     if not request.reply.done():
-                        request.reply.set_exception(error)
-                continue
-            start = 0
-            for request in batch:
-                end = start + len(request.texts)
-                if not request.reply.done():
-                    request.reply.set_result(scores[start:end])
-                start = end
+                        request.reply.set_result(scores[start:end])
+                    start = end
+        finally:
+            # Stopped mid-batch: the requests taken off the queue get an answer too.
+            for request in [*batch, *carried]:
+                _fail(request, _stopped())
+
+
+def _fail(request: _Request, error: BaseException) -> None:
+    if not request.reply.done():
+        request.reply.set_exception(error)
+
+
+def _stopped() -> RuntimeError:
+    return RuntimeError("ThreadedScorer stopped before scoring the request")

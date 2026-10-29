@@ -84,6 +84,25 @@ def test_scorer_errors_reach_every_caller_in_the_batch() -> None:
     asyncio.run(run())
 
 
+def test_stopping_fails_requests_in_flight_and_queued() -> None:
+    scorer = GatedScorer(hold_first=True)
+
+    async def run() -> list[BaseException | list[float]]:
+        threaded = ThreadedScorer(scorer)
+        async with threaded:
+            in_flight = asyncio.create_task(threaded.score([text("a")]))
+            await asyncio.sleep(0.05)
+            queued = asyncio.create_task(threaded.score([text("b")]))
+            await asyncio.sleep(0.05)
+            scorer.release.set()
+        return list(await asyncio.gather(in_flight, queued, return_exceptions=True))
+
+    results = asyncio.run(asyncio.wait_for(run(), timeout=5))
+
+    assert [type(r) for r in results] == [RuntimeError, RuntimeError]
+    assert all("stopped" in str(r) for r in results)
+
+
 def test_needs_to_be_running_and_skips_empty_requests() -> None:
     threaded = ThreadedScorer(GatedScorer())
 
