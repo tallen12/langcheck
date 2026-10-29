@@ -99,3 +99,20 @@ def test_fake_uno_provides_the_modules_the_extension_imports(fake_uno: None) -> 
 
     assert (locale.Language, locale.Country) == ("en", "GB")
     assert result.aText == "Hi."
+
+
+def test_token_diff_annotator_diffs_whitespace_tokens() -> None:
+    from langcheck.evaluation.m2 import GoldEdit
+    from langcheck.evaluation.models import ScoredEdit
+    from langcheck.taxonomy.kinds import ErrorKind
+    from tests.conftest import TokenDiffAnnotator
+
+    annotator = TokenDiffAnnotator(ErrorKind.SPELLING)
+
+    assert annotator.system_edits(("a", "teh", "b"), "a the b") == [
+        ScoredEdit(1, 2, ("the",), ErrorKind.SPELLING)
+    ]
+    assert annotator.reference_edits(("a",), ("a", "b")) == [
+        ScoredEdit(1, 1, ("b",), ErrorKind.SPELLING)
+    ]
+    assert annotator.gold_edits(("a",), [GoldEdit(0, 1, (), "U:X")])[0].kind is ErrorKind.SPELLING
