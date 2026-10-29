@@ -112,8 +112,11 @@ class Checker:
         outcomes = await self._check_chunks(segmentation, misses, keys, context=context)
         for outcome in outcomes:
             suggestions += outcome.suggestions
-        kept = [s for s in suggestions if not touches_terms(text, s.span, dictionary)]
-        in_dictionary = [s for s in suggestions if touches_terms(text, s.span, dictionary)]
+        kept: list[Suggestion] = []
+        in_dictionary: list[Suggestion] = []
+        for suggestion in suggestions:
+            touched = touches_terms(text, suggestion.span, dictionary)
+            (in_dictionary if touched else kept).append(suggestion)
         return CheckResult(
             suggestions=tuple(sorted(kept, key=lambda s: s.span.start)),
             unchecked=tuple(u for outcome in outcomes for u in outcome.unchecked),

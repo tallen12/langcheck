@@ -190,8 +190,14 @@ def _normalise_with_positions(text: str) -> tuple[str, list[int]]:
 def touches_terms(text: str, span: Span, terms: Iterable[str]) -> bool:
     """Whether ``span`` of ``text`` overlaps a whole-word occurrence of any term."""
     for term in terms:
-        pattern = rf"(?<!\w){re.escape(term)}(?!\w)"
-        for match in re.finditer(pattern, text):
+        pattern = re.compile(rf"(?<!\w){re.escape(term)}(?!\w)")
+        # Only an occurrence starting within len(term) of the span can overlap it, so
+        # search that window instead of the whole document once per term. Lookbehind
+        # still sees text before ``pos``; a match cut short at ``endpos`` starts after
+        # the span and cannot overlap it.
+        start = max(span.start - len(term), 0)
+        end = min(span.end + len(term) + 1, len(text))
+        for match in pattern.finditer(text, start, end):
             if span.overlaps(Span(match.start(), match.end())):
                 return True
     return False

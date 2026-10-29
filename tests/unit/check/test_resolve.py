@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from langcheck.check.reply import CheckReply, ReplyIssue
@@ -6,6 +8,7 @@ from langcheck.check.resolve import (
     ValidationPolicy,
     find_occurrence,
     resolve,
+    touches_terms,
 )
 from langcheck.check.suggestion import Option
 from langcheck.taxonomy.kinds import ErrorKind, Operation
@@ -177,3 +180,36 @@ def test_validation_policy_limits_edit_size(
     kind: ErrorKind, original: str, replacement: str, allowed: bool
 ) -> None:
     assert POLICY.allows(kind, original, replacement) is allowed
+
+
+@pytest.mark.parametrize(
+    ("text", "span", "terms", "expected"),
+    [
+        ("Bilbo ran.", Span(0, 5), ["Bilbo"], True),
+        ("aBilbo ran.", Span(1, 6), ["Bilbo"], False),
+        ("Bilbos ran.", Span(0, 5), ["Bilbo"], False),
+        ("We saw New York today.", Span(11, 15), ["New York"], True),
+        ("We saw New York today.", Span(16, 21), ["New York"], False),
+        ("x" * 50_000 + " Bilbo", Span(50_001, 50_006), ["Bilbo", "Shire"], True),
+    ],
+)
+def test_touches_terms_matches_whole_words_near_the_span(
+    text: str, span: Span, terms: list[str], expected: bool
+) -> None:
+    assert touches_terms(text, span, terms) is expected
+
+
+def test_touches_terms_agrees_with_a_whole_text_search() -> None:
+    text = "Ana met Bob. Bobby met Ana-Lee and Ana. ana Bob"
+    terms = ["Ana", "Bob", "Ana-Lee", "met Ana"]
+
+    def whole_text(span: Span) -> bool:
+        return any(
+            span.overlaps(Span(m.start(), m.end()))
+            for term in terms
+            for m in re.finditer(rf"(?<!\w){re.escape(term)}(?!\w)", text)
+        )
+
+    for start in range(len(text)):
+        for end in range(start + 1, min(start + 12, len(text)) + 1):
+            assert touches_terms(text, Span(start, end), terms) is whole_text(Span(start, end))
