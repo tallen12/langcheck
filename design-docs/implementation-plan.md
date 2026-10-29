@@ -47,6 +47,7 @@ Settled in a design review on Oct 28, 2026. The sections below give the details.
 | 12 | Order | CLI → service → LLM first; then the scorer; then sessions, LSP and VS Code; then LibreOffice. |
 | 13 | Python clients | Subpackages under `src/langcheck/`. The LibreOffice code imports only the standard library and `uno`. |
 | 14 | VS Code extension | TypeScript in `editors/vscode/` at the repo root, built with `just vscode`. |
+| 15 | Settings | `pydantic-settings` with nested models. Precedence: values passed to the settings object (CLI options), then environment variables, then a YAML file, then defaults. CLI with `cyclopts`, service with FastAPI. |
 
 ## Architecture
 
@@ -297,13 +298,69 @@ cache are in memory behind `DocumentStore` and `ResultCache` protocols, so Redis
 adapters can be added when one process is no longer enough. The dictionary and API keys
 are in SQL from the start.
 
+## Settings
+
+`src/langcheck/settings/` holds every setting as `pydantic-settings` classes made of
+nested Pydantic models. Two top-level classes, because the CLI and the server need
+different things:
+
+- `ClientSettings`: `server` (URL, API key, timeout) and `llm` for `--local` runs.
+- `ServerSettings`: `http` (host, port), `llm` (base URL, model, API key, timeout,
+  retries, concurrency, reasoning switch), `scorer` (adapters, model names, device,
+  `ScoringPolicy` per kind), `auth` (mode, proxy user header), `dictionary` (backend,
+  database URL), `limits` (per-user requests in flight and per minute), `checker` (chunk
+  size, debounce, context refresh share).
+
+Each nested model is the same frozen value the domain code takes, or converts to one at
+the composition root (for example `llm` to the ported `ClientConfig`). Domain code never
+sees a settings class.
+
+### Sources and precedence
+
+Highest first; a field missing from one source falls through to the next, field by
+field, so nested values merge rather than replace whole sections:
+
+1. **Values passed to the settings object.** The CLI collects its options with `cyclopts`
+   and passes only the ones the user gave as keyword arguments, so an option left out
+   does not mask the layers below.
+2. **Environment variables.** Prefix `LANGCHECK_`, nested with `__`: for example
+   `LANGCHECK_LLM__BASE_URL`, `LANGCHECK_AUTH__MODE`, `LANGCHECK_SERVER__API_KEY`.
+3. **A YAML file**, mirroring the nested structure:
+
+   ```yaml
+   llm:
+     base_url: http://localhost:11434/v1
+     model: qwen3:8b
+   auth:
+     mode: api_key
+   dictionary:
+     backend: sql
+     database_url: sqlite:///langcheck.db
+   ```
+
+   The path comes from `--config` or `LANGCHECK_CONFIG`; without either, `langcheck.yaml`
+   in the working directory is used if it exists. A path given explicitly must exist.
+4. **Defaults** in the models.
+
+This order is set in `settings_customise_sources` (init, environment, YAML; `.env` files
+and secrets directories are not used). Settings load only at startup, in the CLI and the
+API factory, never at import time (`AGENTS.md`). Secrets (`api_key` fields) are
+`SecretStr`, so they never reach logs or `repr`; `langcheck config show` prints the
+merged settings with secrets masked, to see which value won.
+
+Invalid settings stop startup with Pydantic's error, which names the field (for example
+`llm.retries`) and the bad value but not the source; `config show` helps find which
+layer set it.
+
 ## Clients
 
 ### CLI
 
-Built with `cyclopts`, as in contcheck. Settings (server URL, API key, LLM URL and
-model, scorer model) come from a config file and environment variables, validated with
-Pydantic.
+Built with `cyclopts`, as in contcheck. Command-line arguments are the highest layer:
+they override environment variables and the YAML file (see *Settings*). With
+`llm.model: qwen3:8b` in the YAML and `LANGCHECK_LLM__MODEL=llama3` in the environment,
+`langcheck check --local --llm-model gemma3 notes.md` uses `gemma3`; without the option
+it uses `llama3`. Every command takes `--config PATH`.
 
 - `langcheck check FILE [--json] [--local] [--no-score] [--apply]`: one-shot check,
   printed as a diff with the ranked options; `--apply` walks through suggestions
@@ -314,6 +371,8 @@ Pydantic.
 - `langcheck context FILE`: prints the document context, for tuning prompts.
 - `langcheck serve`, `langcheck lsp`, `langcheck admin ...`: run the service, the LSP
   proxy, and manage users.
+- `langcheck config show [--server]`: print the merged client (or server) settings with
+  secrets masked.
 
 `check` and `watch` call the configured server. With `--local`, or when no server is
 configured, they run the same `Checker` in process against the LLM URL directly. The
@@ -373,6 +432,7 @@ langcheck/
     documents/    # sessions, suggestion lifecycle, DocumentStore, ResultCache, scheduler
     dictionary/   # DictionaryStore protocol, memory and SQL implementations
     auth/         # Authenticator protocol, api_key and none modes, User
+    settings/     # ClientSettings, ServerSettings, nested models, YAML source
     api/          # FastAPI app, request and response schemas, SSE
     lsp/          # LSP proxy to the service (pygls)
     libreoffice/  # UNO proofreader; standard library and uno only
@@ -406,10 +466,12 @@ derivation, applying an accepted option. Pure code, fully unit tested.
 
 **M2 — First slice: CLI → service → LLM.** Port `llm` (async and sync clients). Prompt
 v1, chunker, `DocumentContext` builder, `Checker.check(text, context, dictionary)` with
-options in LLM order and the per-user result cache. Service: `POST /check`, `/health`,
-`Authenticator` with `api_key` and `none`, `langcheck admin`, SQL setup shared with M4's
-dictionary. CLI: `check` (service or `--local`), `context`, `serve`. Integration test
-against an OpenAI-compatible server under the `llm` marker.
+options in LLM order and the per-user result cache. `settings` with the sources above
+(adds `pydantic-settings` and `pyyaml`). Service: FastAPI app factory, `POST /check`,
+`/health`, `Authenticator` with `api_key` and `none`, `langcheck admin`, SQL setup shared
+with M4's dictionary. CLI (`cyclopts`): `check` (service or `--local`), `context`,
+`serve`, `config show`. Integration test against an OpenAI-compatible server under the
+`llm` marker.
 
 **M3 — Scoring.** `SentenceScorer` protocol, PLL adapter (ported from contcheck's masked
 LM), CoLA adapter, ranker and `ScoringPolicy` with every kind's filter off. Scorer thread
