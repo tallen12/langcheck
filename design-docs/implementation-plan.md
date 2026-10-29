@@ -384,8 +384,9 @@ it uses `llama3`. Every command takes `--config PATH`.
   `--apply` (not built yet) walks through suggestions interactively and writes the file.
   `--no-score` keeps the LLM's option order in a `--local` run.
   Exits 0 when clean, 1 with suggestions or unchecked spans, 2 when it cannot run.
-- `langcheck watch FILE [--local]`: watches the file (`watchfiles`) and prints new and
-  resolved suggestions as it changes.
+- `langcheck watch FILE [--local]`: watches the file (`watchfiles`) and prints new (`+`)
+  and resolved (`-`) suggestions as it changes. Each save is a one-shot check of the
+  whole file; the result cache keeps unchanged sentences away from the LLM.
 - `langcheck dict FILE [add|remove|list] [WORDS...]`: edit the document's dictionary.
 - `langcheck context FILE`: prints the document context, for tuning prompts.
 - `langcheck serve`, `langcheck lsp`, `langcheck admin add-user|revoke|users`: run the
