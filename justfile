@@ -2,9 +2,9 @@
 default:
     @just --list
 
-# Install locked dependencies with a PyTorch build (cpu, cuda or rocm) and the pre-commit hooks.
+# Install locked dependencies with a PyTorch build (cpu, cuda or rocm), the evaluation tools and the pre-commit hooks.
 setup build="cpu":
-    uv sync --locked --extra {{build}}
+    uv sync --locked --extra {{build}} --extra eval
     uv run --no-sync pre-commit install
 
 # Format Python code.
