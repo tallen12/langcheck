@@ -6,6 +6,7 @@ import pytest
 
 from langcheck.auth.models import User, UserExistsError
 from langcheck.llm.models import ChatMessage, ChatOptions, LLMError
+from langcheck.scoring.models import ScoredText
 
 type Responder = Callable[[Sequence[ChatMessage]], str | LLMError]
 
@@ -68,3 +69,40 @@ class MemoryApiKeyStore:
     def users(self) -> list[str]:
         """Every user with a key, sorted."""
         return sorted(self.hashes)
+
+
+class TableScorer:
+    """A ``SentenceScorer`` and ``AsyncSentenceScorer`` fake that looks scores up by text.
+
+    Unknown texts score ``default``. Every batch it is asked to score is recorded.
+    """
+
+    def __init__(self, table: dict[str, float], *, default: float = 0.0) -> None:
+        self._table = table
+        self._default = default
+        self.batches: list[list[ScoredText]] = []
+
+    def score_now(self, texts: Sequence[ScoredText]) -> list[float]:
+        """Score ``texts`` and record the batch."""
+        self.batches.append(list(texts))
+        return [self._table.get(t.text, self._default) for t in texts]
+
+    async def score(self, texts: Sequence[ScoredText]) -> list[float]:
+        """The async form, for rankers."""
+        return self.score_now(texts)
+
+
+class SyncTableScorer:
+    """The blocking form of :class:`TableScorer`, for code that runs scorers in threads."""
+
+    def __init__(self, table: dict[str, float], *, default: float = 0.0) -> None:
+        self.table = TableScorer(table, default=default)
+
+    def score(self, texts: Sequence[ScoredText]) -> list[float]:
+        """Score ``texts``."""
+        return self.table.score_now(texts)
+
+    @property
+    def batches(self) -> list[list[ScoredText]]:
+        """Every batch scored so far."""
+        return self.table.batches

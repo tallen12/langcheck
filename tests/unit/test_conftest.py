@@ -7,7 +7,16 @@ from langcheck.auth.models import User, UserExistsError
 from langcheck.auth.protocols import ApiKeyStore
 from langcheck.llm.models import ChatMessage, ChatOptions, LLMError, Role
 from langcheck.llm.protocols import AsyncLLMClient
-from tests.conftest import MemoryApiKeyStore, Responder, ScriptedLLM
+from langcheck.scoring.models import ScoredText
+from langcheck.scoring.protocols import AsyncSentenceScorer, SentenceScorer
+from langcheck.text.models import Span
+from tests.conftest import (
+    MemoryApiKeyStore,
+    Responder,
+    ScriptedLLM,
+    SyncTableScorer,
+    TableScorer,
+)
 
 HI = [ChatMessage(Role.USER, "hi")]
 
@@ -50,3 +59,16 @@ def test_memory_api_key_store_keeps_one_key_per_user() -> None:
     assert store.users() == ["ana"]
     assert store.revoke("ana") is True
     assert store.revoke("ana") is False
+
+
+def test_table_scorers_look_scores_up_and_record_batches() -> None:
+    texts = [ScoredText("a", Span(0, 1)), ScoredText("b", Span(0, 1))]
+    asynchronous = TableScorer({"a": 1.5}, default=-1.0)
+    blocking = SyncTableScorer({"b": 2.0})
+    async_contract: AsyncSentenceScorer = asynchronous
+    sync_contract: SentenceScorer = blocking
+
+    assert asyncio.run(async_contract.score(texts)) == [1.5, -1.0]
+    assert sync_contract.score(texts) == [0.0, 2.0]
+    assert asynchronous.batches == [texts]
+    assert blocking.batches == [texts]

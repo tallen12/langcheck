@@ -5,7 +5,7 @@ from langcheck.check.suggestion import Option, Suggestion, suggestion_id
 from langcheck.taxonomy.kinds import ErrorKind, Operation
 from langcheck.text.models import Span
 
-SETTING = CacheSetting("m", "check-v1", "ctx", ("Bilbo", "Shire"))
+SETTING = CacheSetting("m", "check-v1", "ctx", ("Bilbo", "Shire"), "llm-order")
 
 
 def key_for(**changes: object) -> str:
@@ -38,6 +38,7 @@ def test_key_depends_on_text_neighbours_and_setting() -> None:
         replace(SETTING, prompt_version="check-v2"),
         replace(SETTING, context_version="ctx2"),
         replace(SETTING, dictionary=("Bilbo",)),
+        replace(SETTING, ranker="pll"),
     ]:
         assert key_for(setting=setting) != base
 

@@ -125,7 +125,7 @@ def test_check_builds_context_and_returns_suggestions(checker: RecordingChecker)
                 "kind": "Spelling",
                 "operation": "R",
                 "explanation": "Misspelt.",
-                "options": [{"replacement": "the"}],
+                "options": [{"replacement": "the", "score": None, "delta": None}],
             }
         ],
         "unchecked": [{"start": 10, "end": 12, "reason": "LLM error: down"}],

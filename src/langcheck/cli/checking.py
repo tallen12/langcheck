@@ -20,6 +20,7 @@ from langcheck.context.models import DocumentContext
 from langcheck.llm.async_openai_chat import AsyncOpenAIChatClient
 from langcheck.llm.models import ChatOptions
 from langcheck.llm.structured import Failed
+from langcheck.scoring.ranker import KeepOrder
 from langcheck.settings.loading import ClientSettings
 from langcheck.text.regex_splitter import RegexSentenceSplitter
 
@@ -69,6 +70,7 @@ async def open_local(
                 model=settings.llm.model,
                 options=options,
                 policy=ValidationPolicy(),
+                ranker=KeepOrder(),
                 max_words=settings.checker.max_words,
             ),
             contexts=ContextBuilder(

@@ -25,6 +25,7 @@ class CacheSetting:
     prompt_version: str
     context_version: str
     dictionary: Collection[str]
+    ranker: str
 
 
 def cache_key(
@@ -44,6 +45,7 @@ def cache_key(
         setting.prompt_version,
         setting.context_version,
         sorted(setting.dictionary),
+        setting.ranker,
     ]
     encoded = json.dumps(fields, ensure_ascii=False).encode("utf-8")
     return CacheKey(user, hashlib.sha256(encoded).hexdigest())

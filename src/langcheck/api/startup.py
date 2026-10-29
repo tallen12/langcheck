@@ -19,6 +19,7 @@ from langcheck.context.builder import ContextBuilder
 from langcheck.database.schema import open_database
 from langcheck.llm.async_openai_chat import AsyncOpenAIChatClient
 from langcheck.llm.models import ChatOptions
+from langcheck.scoring.ranker import KeepOrder
 from langcheck.settings.loading import ServerSettings
 from langcheck.settings.models import AuthMode
 from langcheck.text.regex_splitter import RegexSentenceSplitter
@@ -54,6 +55,7 @@ async def open_services(
                     model=settings.llm.model,
                     options=options,
                     policy=ValidationPolicy(),
+                    ranker=KeepOrder(),
                     max_words=settings.checker.max_words,
                 ),
                 contexts=ContextBuilder(
