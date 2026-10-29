@@ -3,9 +3,11 @@ from collections.abc import Callable, Sequence
 
 import pytest
 
+from langcheck.auth.models import User, UserExistsError
+from langcheck.auth.protocols import ApiKeyStore
 from langcheck.llm.models import ChatMessage, ChatOptions, LLMError, Role
 from langcheck.llm.protocols import AsyncLLMClient
-from tests.conftest import Responder, ScriptedLLM
+from tests.conftest import MemoryApiKeyStore, Responder, ScriptedLLM
 
 HI = [ChatMessage(Role.USER, "hi")]
 
@@ -34,3 +36,17 @@ def test_scripted_llm_raises_scripted_errors() -> None:
 def test_scripted_llm_needs_a_script() -> None:
     with pytest.raises(ValueError, match="at least one entry"):
         ScriptedLLM([])
+
+
+def test_memory_api_key_store_keeps_one_key_per_user() -> None:
+    store: ApiKeyStore = MemoryApiKeyStore()
+
+    store.add("ana", "h1")
+    with pytest.raises(UserExistsError):
+        store.add("ana", "h2")
+
+    assert store.user_for("h1") == User("ana")
+    assert store.user_for("h2") is None
+    assert store.users() == ["ana"]
+    assert store.revoke("ana") is True
+    assert store.revoke("ana") is False

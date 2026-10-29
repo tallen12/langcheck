@@ -259,7 +259,10 @@ All endpoints except `/health` require authentication. `{uri}` is URL-encoded.
   issue is not suggested again in this session.
 - `GET`, `POST`, `DELETE /documents/{uri}/dictionary`: list, add and remove words.
 - `POST /check`: stateless one-shot check of a text (with an optional URI to use its
-  dictionary), for the CLI and simple clients.
+  dictionary), for the CLI and simple clients. Without a context in the request, the server builds one
+  first and returns it with the suggestions.
+- `POST /context`: the document context of a text, for `langcheck context` and prompt
+  tuning.
 - `GET /health`.
 
 ### Dictionary
@@ -308,8 +311,8 @@ different things:
 - `ClientSettings`: `server` (URL, API key, timeout) and `llm` for `--local` runs.
 - `ServerSettings`: `http` (host, port), `llm` (base URL, model, API key, timeout,
   retries, concurrency, reasoning switch), `scorer` (adapters, model names, device,
-  `ScoringPolicy` per kind), `auth` (mode, proxy user header), `dictionary` (backend,
-  database URL), `limits` (per-user requests in flight and per minute), `checker` (chunk
+  `ScoringPolicy` per kind), `auth` (mode, proxy user header), `database` (the SQL URL
+  shared by API keys and dictionaries), `dictionary` (backend), `limits` (per-user requests in flight and per minute), `checker` (chunk
   size, debounce, context refresh share).
 
 Each nested model is the same frozen value the domain code takes, or converts to one at
@@ -334,9 +337,10 @@ field, so nested values merge rather than replace whole sections:
      model: qwen3:8b
    auth:
      mode: api_key
+   database:
+     url: sqlite:///langcheck.db
    dictionary:
      backend: sql
-     database_url: sqlite:///langcheck.db
    ```
 
    The path comes from `--config` or `LANGCHECK_CONFIG`; without either, `langcheck.yaml`
@@ -364,14 +368,15 @@ they override environment variables and the YAML file (see *Settings*). With
 it uses `llama3`. Every command takes `--config PATH`.
 
 - `langcheck check FILE [--json] [--local] [--no-score] [--apply]`: one-shot check,
-  printed as a diff with the ranked options; `--apply` walks through suggestions
-  interactively and writes the file.
+  printed as `FILE:LINE:COL: Kind: 'original' -> options` with the line and explanation;
+  `--apply` (not built yet) walks through suggestions interactively and writes the file.
+  Exits 0 when clean, 1 with suggestions or unchecked spans, 2 when it cannot run.
 - `langcheck watch FILE [--local]`: watches the file (`watchfiles`) and prints new and
   resolved suggestions as it changes.
 - `langcheck dict FILE [add|remove|list] [WORDS...]`: edit the document's dictionary.
 - `langcheck context FILE`: prints the document context, for tuning prompts.
-- `langcheck serve`, `langcheck lsp`, `langcheck admin ...`: run the service, the LSP
-  proxy, and manage users.
+- `langcheck serve`, `langcheck lsp`, `langcheck admin add-user|revoke|users`: run the
+  service, the LSP proxy, and manage API keys.
 - `langcheck config show [--server]`: print the merged client (or server) settings with
   secrets masked.
 

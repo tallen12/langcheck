@@ -1,8 +1,14 @@
 """Protocols of the check domain."""
 
-from typing import Protocol
+from collections.abc import Collection
+from typing import TYPE_CHECKING, Protocol
 
 from langcheck.check.cache_models import CacheKey, SentenceResult
+from langcheck.context.models import DocumentContext
+
+if TYPE_CHECKING:
+    # Only for annotations: checker.py imports this module for ResultCache.
+    from langcheck.check.checker import CheckResult
 
 
 class ResultCache(Protocol):
@@ -18,4 +24,19 @@ class ResultCache(Protocol):
 
     async def put(self, key: CacheKey, result: SentenceResult) -> None:
         """Store ``result`` under ``key``, possibly evicting older entries."""
+        ...
+
+
+class TextChecker(Protocol):
+    """Checks a whole text for one user."""
+
+    async def check(
+        self,
+        text: str,
+        *,
+        user: str,
+        context: DocumentContext,
+        dictionary: Collection[str] = (),
+    ) -> CheckResult:
+        """The suggestions for ``text``; ``dictionary`` words are never flagged."""
         ...
