@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Coverage output
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Local config and secrets
+.env
+secrets/
+
+# Agent-local state (shared instructions live in AGENTS.md)
+.claude/settings.local.json
+
+# Agent task worktrees (see .agents/skills/git-workflow)
+.worktrees/
+
+# OS files
+.DS_Store
+
+# Evaluation data and run outputs (see design-docs/implementation-plan.md)
+/data/
+/runs/

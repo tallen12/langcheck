@@ -1,0 +1,53 @@
+[project]
+name = "langcheck"
+version = "0.1.0"
+description = "LLM-backed spelling and grammar checker with a FastAPI service and CLI"
+readme = "README.md"
+authors = [
+    { name = "Tyler Allen", email = "tallen12@users.noreply.github.com" }
+]
+requires-python = ">=3.14"
+dependencies = []
+
+[project.scripts]
+langcheck = "langcheck:main"
+
+[build-system]
+requires = ["uv_build>=0.11.2,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+extend-exclude = ["design-docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ANN", "ASYNC", "RUF", "PTH"]
+
+[tool.ty.rules]
+all = "error"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-m", "not models and not llm"]
+markers = [
+    "models: downloads a pretrained Hugging Face model",
+    "llm: needs a running LLM server",
+]
+
+[tool.coverage.run]
+source = ["langcheck"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.7.0",
+    "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.3",
+    "ty>=0.0.94",
+]
