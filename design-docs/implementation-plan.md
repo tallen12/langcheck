@@ -437,11 +437,22 @@ settings or the key change. Built into a
 ### LibreOffice: proofreader extension
 
 `src/langcheck/libreoffice/` is a UNO `XProofreader` implementation, packaged as an
-`.oxt` by `just libreoffice`. LibreOffice runs it in its bundled Python, which cannot
-see our virtualenv, so this subpackage imports only the standard library and `uno`: it
-talks to the service with `urllib` and parses JSON by hand into its own small types. A
-check in `scripts/check_layout.py` enforces the import rule. Unit tests run under our
-Python with a fake `uno` module.
+`.oxt` by `just libreoffice` from the package and the static files in
+`editors/libreoffice/` (registration for English locales, a settings schema, manifest).
+LibreOffice runs it in its bundled Python, which cannot see our virtualenv, so this
+subpackage imports only the standard library and `uno`: it talks to the service with
+`urllib` and parses JSON by hand into its own small types. A check in
+`scripts/check_layout.py` enforces the import rule. That Python is as old as 3.8 in
+LibreOffice 7.x on Windows and macOS, so the package keeps to 3.8 syntax (ruff's target
+for it is `py38`) and `just libreoffice` imports it under Python 3.8 first. Unit tests
+run under our Python with a fake `uno` module; `just test-libreoffice` (and a CI job)
+installs the built `.oxt` in a real headless LibreOffice and checks the suggestion
+reaches Writer's proofreading API.
+
+The server comes from `LANGCHECK_SERVER__URL` and `LANGCHECK_SERVER__API_KEY`, or from
+the extension's configuration (`org.langcheck.libreoffice.Settings`, in Expert
+Configuration). Unsaved documents get an `untitled:` URI per document, keyed by its
+`RuntimeUID` because pyuno wraps the same document in a new object on every lookup.
 
 `doProofreading` is called per paragraph and must answer from that call. The extension:
 
@@ -450,9 +461,28 @@ Python with a fake `uno` module.
    the whole-document context;
 3. when new suggestions arrive, asks LibreOffice to re-check the affected paragraphs.
 
-Step 3 is the main unknown. M5 opens with a spike that confirms a Python proofreader can
-trigger a re-check and can read the whole document from the paragraph call; if it
-cannot, the fallback is a sidebar panel listing suggestions.
+Step 3 was the main unknown, so M5 opened with a spike (Oct 28, 2026, LibreOffice
+26.2.6 on Fedora, its Python 3.14 pyuno). A throwaway Python proofreader, registered for
+`en-US` through `Linguistic.xcu`, returned nothing at first and then fired a
+`LinguServiceEvent` with `PROOFREAD_AGAIN` (8) to the listener LibreOffice registers
+through `XLinguServiceEventBroadcaster`:
+
+- **Re-check: confirmed, with a view.** With a Writer view (headless, but loaded without
+  `Hidden`), LibreOffice called `doProofreading` again for every paragraph within
+  milliseconds of the event, and the error returned then is the one it applies. Without
+  a view (`Hidden=True`) nothing re-ran, not even after marking each `XFlatParagraph`
+  unchecked and calling `XProofreadingIterator.startProofreading`: the re-check runs in
+  Writer's layout idle loop, which every real editing window has.
+- **Whole document: confirmed.** From inside `doProofreading` the extension finds the
+  open text document whose text contains the paragraph (`Desktop.getComponents()`,
+  `XTextDocument.getText().getString()`). `getCurrentComponent()` is empty headless,
+  and the flat paragraph iterator only lists paragraphs still waiting to be checked, so
+  neither alone is enough. `aDocumentIdentifier` is a per-document string ("1"), not the
+  component.
+- **Consequences.** The event re-checks every paragraph, and LibreOffice calls some
+  paragraphs two or three times while loading, so `doProofreading` must answer from the
+  cache without blocking, and the event is fired only when a document's suggestions
+  actually changed. The sidebar fallback is not needed.
 
 ## Repo layout
 
@@ -569,7 +599,5 @@ second feature that lands after it.
 - **Whole-sentence options vs span options.** The plan scores span replacements inside
   the original sentence. If the LLM often needs several linked edits (agreement across a
   clause), allow an issue to carry a multi-span edit.
-- **LibreOffice re-check.** If the M5 spike shows LibreOffice cannot be made to re-check
-  a paragraph from an extension, switch to a sidebar panel.
 - **Scaling past one process.** Redis or SQL adapters for `DocumentStore` and
   `ResultCache`, and a separate scorer service, when one process is not enough.

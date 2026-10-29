@@ -1,6 +1,8 @@
 """Fixtures shared across test types."""
 
-from collections.abc import Callable, Sequence
+import sys
+import types
+from collections.abc import Callable, Iterator, Sequence
 
 import pytest
 from transformers import PreTrainedTokenizerFast
@@ -149,3 +151,77 @@ def tiny_tokenizer() -> PreTrainedTokenizerFast:
         unk_token="<unk>",
         mask_token="<mask>",
     )
+
+
+class _UnoStruct:
+    """A UNO struct: attributes set after construction, keyword arguments allowed."""
+
+    def __init__(self, *args: object, **fields: object) -> None:
+        for name, value in fields.items():
+            setattr(self, name, value)
+
+
+class _Locale(_UnoStruct):
+    def __init__(self, Language: str = "", Country: str = "", Variant: str = "") -> None:
+        super().__init__(Language=Language, Country=Country, Variant=Variant)
+
+
+class _ImplementationHelper:
+    def __init__(self) -> None:
+        self.implementations: list[tuple[object, str, tuple[str, ...]]] = []
+
+    def addImplementation(self, ctor: object, name: str, services: tuple[str, ...]) -> None:
+        self.implementations.append((ctor, name, services))
+
+
+def _module(name: str, **attributes: object) -> types.ModuleType:
+    module = types.ModuleType(name)
+    for key, value in attributes.items():
+        setattr(module, key, value)
+    return module
+
+
+@pytest.fixture
+def fake_uno(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Stand-ins for the UNO modules LibreOffice provides, so the LibreOffice extension
+    imports and runs under our Python. Modules that import them are reloaded per test.
+    """
+    interfaces = {
+        name: type(name, (), {})
+        for name in [
+            "XServiceInfo",
+            "XServiceName",
+            "XServiceDisplayName",
+            "XProofreader",
+            "XSupportedLocales",
+            "XLinguServiceEventBroadcaster",
+        ]
+    }
+    modules = {
+        "unohelper": _module(
+            "unohelper", Base=type("Base", (), {}), ImplementationHelper=_ImplementationHelper
+        ),
+        "com": _module("com"),
+        "com.sun": _module("com.sun"),
+        "com.sun.star": _module("com.sun.star"),
+        "com.sun.star.lang": _module(
+            "com.sun.star.lang",
+            Locale=_Locale,
+            **{k: v for k, v in interfaces.items() if k.startswith("XService")},
+        ),
+        "com.sun.star.beans": _module(
+            "com.sun.star.beans", PropertyValue=type("PropertyValue", (_UnoStruct,), {})
+        ),
+        "com.sun.star.linguistic2": _module(
+            "com.sun.star.linguistic2",
+            ProofreadingResult=type("ProofreadingResult", (_UnoStruct,), {}),
+            SingleProofreadingError=type("SingleProofreadingError", (_UnoStruct,), {}),
+            LinguServiceEvent=type("LinguServiceEvent", (_UnoStruct,), {}),
+            **{k: v for k, v in interfaces.items() if not k.startswith("XService")},
+        ),
+    }
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.delitem(sys.modules, "langcheck.libreoffice.component", raising=False)
+    yield
+    sys.modules.pop("langcheck.libreoffice.component", None)

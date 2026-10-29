@@ -96,6 +96,47 @@ jobs:
           path: editors/vscode/langcheck.vsix
           if-no-files-found: error
 
+  libreoffice:
+    name: LibreOffice extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.4"
+          enable-cache: true
+
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: "1.57.0"
+
+      # Headless Writer and the system Python's uno, for the real-LibreOffice test.
+      - name: Install LibreOffice
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-writer-nogui python3-uno
+
+      - name: Install dependencies
+        run: just setup
+
+      # Checks the package on Python 3.8, then builds dist/langcheck.oxt.
+      - name: Run just libreoffice
+        run: just libreoffice
+
+      - name: Run just test-libreoffice
+        run: just test-libreoffice
+
+      - name: Upload the extension
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: langcheck-oxt
+          path: dist/langcheck.oxt
+          if-no-files-found: error
+
   gitleaks:
     # Scans the whole history, so a commit made without the pre-commit hook
     # is still caught. Keep the version in step with .pre-commit-config.yaml.

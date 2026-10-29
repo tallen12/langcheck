@@ -45,6 +45,15 @@ vscode:
     npm ci --no-audit --no-fund
     npm run package
 
+# Build the LibreOffice extension into dist/langcheck.oxt, after checking it runs on Python 3.8.
+libreoffice:
+    uv run --no-project --python 3.8 python scripts/check_libreoffice_python.py
+    uv run python scripts/build_oxt.py
+
+# Run the tests that drive a real LibreOffice (needs soffice and its Python uno).
+test-libreoffice:
+    uv run pytest -m libreoffice
+
 # Remove finished worktrees and merged branches (flags: --fetch, --dry-run).
 prune-worktrees *flags:
     uv run python scripts/prune_worktrees.py {{flags}}

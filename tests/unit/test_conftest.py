@@ -87,3 +87,15 @@ def test_tiny_tokenizer_has_roberta_special_tokens_and_offsets(
     assert encoded["input_ids"][-1] == tiny_tokenizer.sep_token_id
     assert encoded["offset_mapping"][0] == (0, 0)
     assert len(truncated["input_ids"]) == 4
+
+
+def test_fake_uno_provides_the_modules_the_extension_imports(fake_uno: None) -> None:
+    from com.sun.star.lang import Locale
+    from com.sun.star.linguistic2 import ProofreadingResult
+
+    locale = Locale("en", "GB", "")
+    result = ProofreadingResult()
+    result.aText = "Hi."
+
+    assert (locale.Language, locale.Country) == ("en", "GB")
+    assert result.aText == "Hi."
