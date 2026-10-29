@@ -17,6 +17,8 @@ from langcheck.documents.sessions import (
     VersionConflict,
     changed_share,
 )
+from langcheck.limits.models import Admission, Permit, RateLimited
+from langcheck.limits.user_limiter import Unlimited
 from langcheck.llm.structured import Failed
 from langcheck.taxonomy.kinds import ErrorKind, Operation
 from langcheck.text.models import Span
@@ -106,6 +108,7 @@ def make_sessions(
         checker=checker or TypoChecker(),
         contexts=contexts or CountingContexts(),
         splitter=RegexSentenceSplitter(),
+        limiter=Unlimited(),
         debounce=0.75,
         refresh_share=refresh_share,
         sleep=gate.sleep if gate is not None else no_wait,
@@ -315,3 +318,55 @@ def test_changed_share_counts_repeats() -> None:
     assert changed_share(("a", "b"), ()) == 0.0
     assert changed_share(("a", "b"), ("a", "b", "c", "d")) == 0.5
     assert changed_share(("a",), ("a", "a")) == 0.5
+
+
+class LimitedOnce:
+    """Refuses the first check, then admits."""
+
+    def __init__(self) -> None:
+        self.asked = 0
+
+    def admit(self, user: str) -> Admission:
+        self.asked += 1
+        return RateLimited(5.0) if self.asked == 1 else Permit(lambda: None)
+
+
+def test_rate_limited_checks_wait_and_retry() -> None:
+    checker = TypoChecker()
+    waits: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        await asyncio.sleep(0)
+
+    sessions = DocumentSessions(
+        MemoryDocumentStore(),
+        checker=checker,
+        contexts=CountingContexts(),
+        splitter=RegexSentenceSplitter(),
+        limiter=LimitedOnce(),
+        debounce=0.5,
+        sleep=sleep,
+    )
+
+    async def run() -> list[CheckState]:
+        states: list[CheckState] = []
+        async with sessions.watch(KEY) as queue:
+            await sessions.update(KEY, "Read teh book.")
+            await sessions.wait_idle()
+            while not queue.empty():
+                event = queue.get_nowait()
+                if isinstance(event, Snapshot):
+                    states.append(event.state)
+        return states
+
+    states = asyncio.run(run())
+
+    assert waits == [0.5, 5.0]
+    assert states == [
+        CheckState.PENDING,
+        CheckState.RATE_LIMITED,
+        CheckState.CHECKING,
+        CheckState.DONE,
+    ]
+    assert len(checker.checked) == 1

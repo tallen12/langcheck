@@ -1,9 +1,10 @@
 """Open documents: updates, background checks, accepting and dismissing suggestions.
 
 An update stores the new version at once, moving suggestions from unchanged sentences,
-then checks the whole text after a short debounce. The result cache means only new or
-edited sentences reach the LLM. A newer version cancels the pending check of an older
-one, and a check whose version is no longer current is discarded.
+then checks the whole text after a short debounce, waiting out the user's rate limit.
+The result cache means only new or edited sentences reach the LLM. A newer version
+cancels the pending check of an older one, and a check whose version is no longer
+current is discarded.
 """
 
 import asyncio
@@ -26,6 +27,8 @@ from langcheck.documents.models import (
     DocumentKey,
 )
 from langcheck.documents.protocols import DocumentStore
+from langcheck.limits.models import Permit, RateLimited
+from langcheck.limits.protocols import CheckLimiter
 from langcheck.text.diff import SentenceDiff, diff_sentences
 from langcheck.text.models import Span
 from langcheck.text.protocols import SentenceSplitter
@@ -81,6 +84,7 @@ class DocumentSessions:
         checker: TextChecker,
         contexts: ContextSource,
         splitter: SentenceSplitter,
+        limiter: CheckLimiter,
         debounce: float = DEFAULT_DEBOUNCE,
         refresh_share: float = DEFAULT_REFRESH_SHARE,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -89,6 +93,7 @@ class DocumentSessions:
         self._checker = checker
         self._contexts = contexts
         self._splitter = splitter
+        self._limiter = limiter
         self._debounce = debounce
         self._refresh_share = refresh_share
         self._sleep = sleep
@@ -249,15 +254,26 @@ class DocumentSessions:
 
     async def _check(self, key: DocumentKey, version: int) -> None:
         await self._sleep(self._debounce)
-        document = await self._set_state(key, version, CheckState.CHECKING)
-        if document is None:
-            return
-        try:
-            built = await self._context_for(document)
-            result = await self._checker.check(document.text, user=key.user, context=built.context)
-        except Exception:
-            await self._set_state(key, version, CheckState.FAILED)
-            raise
+        while True:
+            match self._limiter.admit(key.user):
+                case Permit() as permit:
+                    break
+                case RateLimited(retry_after=wait):
+                    if await self._set_state(key, version, CheckState.RATE_LIMITED) is None:
+                        return
+                    await self._sleep(wait)
+        with permit:
+            document = await self._set_state(key, version, CheckState.CHECKING)
+            if document is None:
+                return
+            try:
+                built = await self._context_for(document)
+                result = await self._checker.check(
+                    document.text, user=key.user, context=built.context
+                )
+            except Exception:
+                await self._set_state(key, version, CheckState.FAILED)
+                raise
         async with self._lock(key):
             current = await self._store.get(key)
             if current is None or current.version != version:

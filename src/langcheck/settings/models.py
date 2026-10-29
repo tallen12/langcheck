@@ -141,3 +141,14 @@ class ScorerSettings(BaseModel):
                 {kind: KindPolicy(rule.filter, rule.margin) for kind, rule in self.policy.items()}
             ),
         )
+
+
+class LimitsSettings(BaseModel):
+    """Per-user limits on checks (one-shot or in a session), so one user cannot starve
+    the others: how many may run at once and how many may start per minute.
+    """
+
+    model_config = _SECTION
+
+    in_flight: Annotated[int, Field(ge=1)] = 2
+    per_minute: Annotated[int, Field(ge=1)] = 30

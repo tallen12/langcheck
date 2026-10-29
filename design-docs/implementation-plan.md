@@ -297,7 +297,9 @@ one) plug in behind the same protocol.
 
 OIDC can be added later as another mode. TLS is handled by a reverse proxy (Caddy, nginx
 or Traefik) in front of uvicorn, documented with an example config. Each user gets a
-limit on LLM requests in flight and per minute, so one user cannot starve the others.
+limit on checks in flight and per minute (`limits.in_flight`, `limits.per_minute`), so
+one user cannot starve the others. A check counts once however many chunks it sends to
+the LLM; `/check` answers 429 with `Retry-After`, and a session check waits and retries.
 
 ### Process and state
 

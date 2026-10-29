@@ -1,5 +1,6 @@
 """The server's composition root: builds the services from ``ServerSettings``."""
 
+import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -17,6 +18,7 @@ from langcheck.check.memory_cache import MemoryResultCache
 from langcheck.check.resolve import ValidationPolicy
 from langcheck.context.builder import ContextBuilder
 from langcheck.database.schema import open_database
+from langcheck.limits.user_limiter import UserLimiter
 from langcheck.llm.async_openai_chat import AsyncOpenAIChatClient
 from langcheck.llm.models import ChatOptions
 from langcheck.scoring.factory import AdapterLoader, load_adapter, open_ranker
@@ -67,6 +69,11 @@ async def open_services(
                     llm,
                     options=options,
                     max_paragraphs=settings.checker.context_max_paragraphs,
+                ),
+                limiter=UserLimiter(
+                    max_in_flight=settings.limits.in_flight,
+                    per_minute=settings.limits.per_minute,
+                    clock=time.monotonic,
                 ),
             )
     finally:

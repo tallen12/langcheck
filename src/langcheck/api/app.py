@@ -1,5 +1,6 @@
 """The FastAPI app, built from already constructed services."""
 
+import math
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from langcheck.auth.protocols import Authenticator
 from langcheck.check.protocols import TextChecker
 from langcheck.context.models import DocumentContext
 from langcheck.context.protocols import ContextSource
+from langcheck.limits.models import Permit, RateLimited
+from langcheck.limits.protocols import CheckLimiter
 from langcheck.llm.structured import Failed
 
 
@@ -29,6 +32,7 @@ class Services:
     authenticator: Authenticator
     checker: TextChecker
     contexts: ContextSource
+    limiter: CheckLimiter
 
 
 type ServicesFactory = Callable[[], AbstractAsyncContextManager[Services]]
@@ -72,14 +76,17 @@ def build_app(services: ServicesFactory) -> FastAPI:
 
     @app.post("/check")
     async def check(body: CheckRequest, caller: Annotated[User, Depends(user)]) -> CheckResponse:
-        if body.context is not None:
-            context = body.context.to_context()
-        else:
-            context = await _context_or_empty(current().contexts, body.text, body.dictionary)
-        result = await current().checker.check(
-            body.text, user=caller.name, context=context, dictionary=body.dictionary
-        )
-        return CheckResponse.of(result, context)
+        services = current()
+        match services.limiter.admit(caller.name):
+            case RateLimited(retry_after=wait):
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="too many checks; try again later",
+                    headers={"Retry-After": str(math.ceil(wait))},
+                )
+            case Permit() as permit:
+                with permit:
+                    return await _check(services, body, caller)
 
     @app.post("/context")
     async def context(body: ContextRequest, caller: Annotated[User, Depends(user)]) -> ContextBody:
@@ -90,6 +97,17 @@ def build_app(services: ServicesFactory) -> FastAPI:
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=reason)
 
     return app
+
+
+async def _check(services: Services, body: CheckRequest, caller: User) -> CheckResponse:
+    if body.context is not None:
+        context = body.context.to_context()
+    else:
+        context = await _context_or_empty(services.contexts, body.text, body.dictionary)
+    result = await services.checker.check(
+        body.text, user=caller.name, context=context, dictionary=body.dictionary
+    )
+    return CheckResponse.of(result, context)
 
 
 async def _context_or_empty(
