@@ -155,11 +155,14 @@ def find_occurrence(text: str, quote: str, occurrence: int) -> Span | None:
     needle = _normalise(quote)
     if not needle or occurrence < 1:
         return None
-    start = -1
-    for _ in range(occurrence):
-        start = haystack.find(needle, start + 1)
+    # Occurrences do not overlap, as with str.count: "aa" occurs once in "aaa".
+    start = haystack.find(needle)
+    for _ in range(occurrence - 1):
         if start == -1:
             return None
+        start = haystack.find(needle, start + len(needle))
+    if start == -1:
+        return None
     return Span(positions[start], positions[start + len(needle) - 1] + 1)
 
 

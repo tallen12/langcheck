@@ -3,7 +3,8 @@
 A sentence ends at ``.``, ``!``, ``?`` or ``…`` (possibly repeated, possibly followed by
 closing quotes or brackets) when whitespace follows and the next sentence starts with an
 uppercase letter, a digit or an opening quote or bracket. A full stop after a known
-abbreviation or a single-letter initial does not end a sentence. Dialogue such as
+abbreviation or a single-letter initial does not end a sentence, except the pronoun
+``I``. Numeral abbreviations such as ``No.`` only count before a digit. Dialogue such as
 ``"Stop!" she said.`` stays one sentence because a lowercase word follows the quote.
 """
 
@@ -12,6 +13,7 @@ from collections.abc import Collection
 
 from langcheck.text.models import Span, trimmed_span
 
+# Lowercase abbreviations, without their final full stop, that rarely end a sentence.
 DEFAULT_ABBREVIATIONS: frozenset[str] = frozenset(
     {
         "mr",
@@ -30,7 +32,6 @@ DEFAULT_ABBREVIATIONS: frozenset[str] = frozenset(
         "cf",
         "al",
         "fig",
-        "no",
         "vol",
         "pp",
         "ch",
@@ -53,7 +54,10 @@ DEFAULT_ABBREVIATIONS: frozenset[str] = frozenset(
         "dec",
     }
 )
-"""Lowercase abbreviations, without their final full stop, that rarely end a sentence."""
+
+# Abbreviations that are also common words, so they only count before a number:
+# "No. 5" but "He said no. She left."
+DEFAULT_NUMERAL_ABBREVIATIONS: frozenset[str] = frozenset({"no", "nos"})
 
 # Curly quotes and guillemets are escaped so the patterns stay unambiguous to read.
 _BOUNDARY = re.compile(r"[.!?\u2026]+[\"'\u201d\u2019\u00bb)\]]*(?=\s)")
@@ -64,8 +68,14 @@ _WORD_BEFORE = re.compile(r"([\w.]+)\.$")
 class RegexSentenceSplitter:
     """Splits a paragraph into sentences with :data:`DEFAULT_ABBREVIATIONS` or a custom set."""
 
-    def __init__(self, *, abbreviations: Collection[str] = DEFAULT_ABBREVIATIONS) -> None:
+    def __init__(
+        self,
+        *,
+        abbreviations: Collection[str] = DEFAULT_ABBREVIATIONS,
+        numeral_abbreviations: Collection[str] = DEFAULT_NUMERAL_ABBREVIATIONS,
+    ) -> None:
         self._abbreviations = frozenset(a.lower() for a in abbreviations)
+        self._numeral_abbreviations = frozenset(a.lower() for a in numeral_abbreviations)
 
     def split(self, text: str) -> list[Span]:
         """Return the sentence spans of ``text``, trimmed of surrounding whitespace."""
@@ -93,5 +103,7 @@ class RegexSentenceSplitter:
         if word is None:
             return True
         token = word.group(1).lower()
-        is_initial = len(token) == 1 and token.isalpha()
-        return not (is_initial or token in self._abbreviations)
+        # "I." is far more often the pronoun ending a sentence than a middle initial.
+        is_initial = len(token) == 1 and token.isalpha() and word.group(1) != "I"
+        is_numeral_abbreviation = first.isdigit() and token in self._numeral_abbreviations
+        return not (is_initial or is_numeral_abbreviation or token in self._abbreviations)

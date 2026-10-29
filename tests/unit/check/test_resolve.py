@@ -152,6 +152,8 @@ def test_overlapping_issues_keep_the_first() -> None:
         ("he said “hi”", 'said "hi"', 1, Span(3, 12)),
         ("anything", "   ", 1, None),
         ("anything", "any", 0, None),
+        ("aaa", "aa", 2, None),
+        ("aaaa", "aa", 2, Span(2, 4)),
     ],
 )
 def test_find_occurrence_normalises_whitespace_and_quotes(

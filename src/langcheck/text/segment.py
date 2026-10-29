@@ -5,7 +5,8 @@ import re
 from langcheck.text.models import Paragraph, Segmentation, Sentence, Span, trimmed_span
 from langcheck.text.protocols import SentenceSplitter
 
-_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n\s*")
+# A blank line may hold spaces, tabs or the \r of a CRLF line ending.
+_PARAGRAPH_BREAK = re.compile(r"\n[^\S\n]*\n\s*")
 
 
 def paragraph_spans(text: str) -> list[Span]:
