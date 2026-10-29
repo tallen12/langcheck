@@ -46,8 +46,9 @@ def test_gold_edits_keep_their_spans_and_get_kinds(annotator: ErrantEditAnnotato
 
     kinds = [edit.kind for edit in annotator.gold_edits(SOURCE, gold)]
 
+    # The unknown code is typed by ERRANT: inserting "X" is a missing word.
     assert kinds == [
-        None,
+        ErrorKind.MISSING_WORD,
         ErrorKind.SUBJECT_VERB_AGREEMENT,
         ErrorKind.SPELLING,
         ErrorKind.PUNCTUATION,
@@ -59,3 +60,17 @@ def test_gold_edits_that_delete_everything(annotator: ErrantEditAnnotator) -> No
     [edit] = annotator.gold_edits(("Hello",), [GoldEdit(0, 1, (), "U:OTHER")])
 
     assert (edit.start, edit.end, edit.correction) == (0, 1, ())
+
+
+def test_gold_edits_with_other_categories_are_typed_by_errant(
+    annotator: ErrantEditAnnotator,
+) -> None:
+    source = ("People", "get", "certain", "disease", "because", "of", "genetic", "changes", ".")
+    nucle = [GoldEdit(3, 4, ("diseases",), "Nn"), GoldEdit(1, 2, ("got",), "Vt")]
+
+    edits = annotator.gold_edits(source, nucle)
+
+    assert [(e.start, e.end, e.correction, e.kind) for e in edits] == [
+        (1, 2, ("got",), ErrorKind.VERB_TENSE),
+        (3, 4, ("diseases",), ErrorKind.NOUN_NUMBER),
+    ]

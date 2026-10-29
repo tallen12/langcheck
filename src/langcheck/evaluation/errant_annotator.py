@@ -15,6 +15,7 @@ from langcheck.taxonomy.errant_map import (
     EditEvidence,
     Mapped,
     UnknownErrantCodeError,
+    code_entry,
     map_edit,
 )
 from langcheck.taxonomy.kinds import ErrorKind
@@ -42,18 +43,29 @@ class ErrantEditAnnotator:
         return self._annotate(original, correction)
 
     def gold_edits(self, source: Sequence[str], edits: Sequence[GoldEdit]) -> list[ScoredEdit]:
-        """Kinds for M2 edits, with the tags and dependencies both sides need."""
+        """Kinds for M2 edits, with the tags and dependencies both sides need.
+
+        Sets annotated with other categories than ERRANT's (CoNLL-2014 uses NUCLE's
+        ``Wci``, ``ArtOrDet``, ...) get each edit typed by ERRANT's classifier on its
+        exact span, as ERRANT's ``m2_to_m2 -auto`` does; the span is never changed.
+        """
         original = self._annotator.parse(" ".join(source), tokenise=False)
         target = corrected(source, edits)
-        correction = self._annotator.parse(" ".join(target), tokenise=False) if target else None
+        correction = self._annotator.parse(" ".join(target), tokenise=False)
         scored: list[ScoredEdit] = []
         shift = 0
         for edit in sorted(edits, key=lambda e: (e.start, e.end)):
             c_start = edit.start + shift
             c_end = c_start + len(edit.correction)
             shift += len(edit.correction) - (edit.end - edit.start)
-            clean = correction[c_start:c_end] if correction is not None else None
-            kind = self._kind(edit.code, original[edit.start : edit.end], clean)
+            code = edit.code
+            if not _is_errant_code(code):
+                imported = self._annotator.import_edit(
+                    original, correction, [edit.start, edit.end, c_start, c_end], min=False
+                )
+                code = str(imported.type)
+            clean = correction[c_start:c_end]
+            kind = self._kind(code, original[edit.start : edit.end], clean)
             scored.append(ScoredEdit(edit.start, edit.end, edit.correction, kind))
         return scored
 
@@ -71,8 +83,8 @@ class ErrantEditAnnotator:
             )
         return edits
 
-    def _kind(self, code: str, noisy: Span, clean: Span | None) -> ErrorKind | None:
-        clean_tokens = list(clean) if clean is not None else []
+    def _kind(self, code: str, noisy: Span, clean: Span) -> ErrorKind | None:
+        clean_tokens = list(clean)
         words = tuple(token.text for token in noisy)
         evidence = EditEvidence(
             noisy=words,
@@ -99,6 +111,14 @@ def load_errant_annotator(model: str = DEFAULT_MODEL) -> ErrantEditAnnotator:
     """Load ``model`` for ERRANT; one per process, since ERRANT keeps it in a global."""
     nlp = spacy.load(model, exclude=["ner"])
     return ErrantEditAnnotator(errant.load("en", nlp), classifier.spell)
+
+
+def _is_errant_code(code: str) -> bool:
+    try:
+        code_entry(code)
+    except UnknownErrantCodeError:
+        return False
+    return True
 
 
 def _span(tokens: object) -> Span:
