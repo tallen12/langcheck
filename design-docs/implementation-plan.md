@@ -89,8 +89,9 @@ For each changed chunk of a document:
 8. **Publish.** Store the suggestions against the document version and send them to
    the clients watching it.
 
-Results are cached per user and sentence: key = hash(sentence, neighbours, context
-version, model, prompt version). An unchanged sentence is never sent again. The cache is
+Results are cached per user and sentence: key = hash(sentence, neighbouring sentences,
+context version, model, prompt version, dictionary). The context version is a fingerprint
+of its content. An unchanged sentence is never sent again. The cache is
 not shared between users: hits across users would be rare, and a shared cache would hint
 at what others have checked.
 
