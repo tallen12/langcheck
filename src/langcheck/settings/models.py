@@ -158,3 +158,21 @@ class LimitsSettings(BaseModel):
 
     in_flight: Annotated[int, Field(ge=1)] = 2
     per_minute: Annotated[int, Field(ge=1)] = 30
+
+
+class DictionaryBackend(StrEnum):
+    """Where per-document dictionaries are kept."""
+
+    SQL = "sql"
+    MEMORY = "memory"
+
+
+class DictionarySettings(BaseModel):
+    """``sql`` (the default) keeps dictionaries in ``database.url``; ``memory`` loses
+    them on restart, for tests and throwaway servers. Unsaved documents' words are
+    always kept in memory only.
+    """
+
+    model_config = _SECTION
+
+    backend: DictionaryBackend = DictionaryBackend.SQL

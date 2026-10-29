@@ -9,6 +9,7 @@ from langcheck.auth.models import AuthResult, Unauthenticated, User
 from langcheck.check.checker import CheckResult, Unchecked
 from langcheck.check.suggestion import Option, Suggestion
 from langcheck.context.models import DocumentContext, Register
+from langcheck.dictionary.memory_store import MemoryDictionaryStore
 from langcheck.documents.memory_store import MemoryDocumentStore
 from langcheck.documents.sessions import DocumentSessions
 from langcheck.limits.protocols import CheckLimiter
@@ -80,6 +81,9 @@ class FixedContexts:
 def client_for(
     checker: RecordingChecker, contexts: FixedContexts, *, limiter: CheckLimiter | None = None
 ) -> TestClient:
+    dictionary = MemoryDictionaryStore()
+    dictionary.add("ana", "file:///notes.md", ["Shire", "Frodo"])
+
     @asynccontextmanager
     async def services() -> AsyncGenerator[Services]:
         yield Services(
@@ -93,7 +97,9 @@ def client_for(
                 contexts=contexts,
                 splitter=RegexSentenceSplitter(),
                 limiter=Unlimited(),
+                dictionary=dictionary,
             ),
+            dictionary=dictionary,
         )
 
     return TestClient(build_app(services))
@@ -217,3 +223,16 @@ def test_check_answers_429_when_the_user_is_over_the_limit(checker: RecordingChe
     assert second.status_code == 429
     assert second.headers["Retry-After"] == "60"
     assert len(checker.calls) == 1
+
+
+def test_check_adds_the_stored_dictionary_of_the_named_document(
+    checker: RecordingChecker,
+) -> None:
+    with client_for(checker, FixedContexts()) as client:
+        client.post(
+            "/check",
+            json={"text": "Hi.", "dictionary": ["Bilbo"], "uri": "file:///notes.md"},
+            headers=AUTH,
+        )
+
+    assert sorted(checker.calls[0][3]) == ["Bilbo", "Frodo", "Shire"]

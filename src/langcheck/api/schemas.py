@@ -60,13 +60,16 @@ class ContextBody(BaseModel):
 
 
 class CheckRequest(BaseModel):
-    """A one-shot check. Without ``context`` the server builds one from the text."""
+    """A one-shot check. Without ``context`` the server builds one from the text. With
+    ``uri``, that document's stored dictionary is used as well as ``dictionary``.
+    """
 
     model_config = _BODY
 
     text: Text
     dictionary: Words = []
     context: ContextBody | None = None
+    uri: Annotated[str | None, Field(max_length=2000)] = None
 
 
 class ContextRequest(BaseModel):
@@ -253,3 +256,19 @@ class DocumentBody(BaseModel):
             suggestions=[SuggestionBody.of(s) for s in snapshot.suggestions],
             unchecked=[UncheckedBody.of(u) for u in snapshot.unchecked],
         )
+
+
+class WordsRequest(BaseModel):
+    """Words to add to or remove from a document's dictionary."""
+
+    model_config = _BODY
+
+    words: Annotated[Words, Field(min_length=1)]
+
+
+class WordsBody(BaseModel):
+    """A document's dictionary, sorted."""
+
+    model_config = _BODY
+
+    words: list[str]

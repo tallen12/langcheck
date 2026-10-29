@@ -6,6 +6,7 @@ import pytest
 from langcheck.check.checker import CheckResult
 from langcheck.check.suggestion import Option, Suggestion, suggestion_id
 from langcheck.context.models import DocumentContext, Register
+from langcheck.dictionary.memory_store import MemoryDictionaryStore
 from langcheck.documents.events import Closed, DocumentEvent, Snapshot
 from langcheck.documents.memory_store import MemoryDocumentStore
 from langcheck.documents.models import CheckState, DocumentKey
@@ -32,6 +33,7 @@ class TypoChecker:
 
     def __init__(self) -> None:
         self.checked: list[tuple[str, str, DocumentContext]] = []
+        self.words: list[frozenset[str]] = []
         self.fail = False
 
     async def check(
@@ -43,6 +45,7 @@ class TypoChecker:
         dictionary: Collection[str] = (),
     ) -> CheckResult:
         self.checked.append((text, user, context))
+        self.words.append(frozenset(dictionary))
         if self.fail:
             msg = "checker broke"
             raise RuntimeError(msg)
@@ -99,6 +102,7 @@ def make_sessions(
     *,
     gate: Gate | None = None,
     refresh_share: float = 0.2,
+    dictionary: MemoryDictionaryStore | None = None,
 ) -> DocumentSessions:
     async def no_wait(seconds: float) -> None:
         await asyncio.sleep(0)
@@ -109,6 +113,7 @@ def make_sessions(
         contexts=contexts or CountingContexts(),
         splitter=RegexSentenceSplitter(),
         limiter=Unlimited(),
+        dictionary=dictionary or MemoryDictionaryStore(),
         debounce=0.75,
         refresh_share=refresh_share,
         sleep=gate.sleep if gate is not None else no_wait,
@@ -345,6 +350,7 @@ def test_rate_limited_checks_wait_and_retry() -> None:
         contexts=CountingContexts(),
         splitter=RegexSentenceSplitter(),
         limiter=LimitedOnce(),
+        dictionary=MemoryDictionaryStore(),
         debounce=0.5,
         sleep=sleep,
     )
@@ -370,3 +376,21 @@ def test_rate_limited_checks_wait_and_retry() -> None:
         CheckState.DONE,
     ]
     assert len(checker.checked) == 1
+
+
+def test_session_checks_use_the_documents_dictionary() -> None:
+    checker = TypoChecker()
+    dictionary = MemoryDictionaryStore()
+    dictionary.add("ana", KEY.uri, ["Shire"])
+    sessions = make_sessions(checker, dictionary=dictionary)
+
+    async def run() -> bool:
+        await sessions.update(KEY, "Read teh book.")
+        await sessions.wait_idle()
+        rechecked = await sessions.dictionary_changed(KEY)
+        await sessions.wait_idle()
+        return rechecked and not await sessions.dictionary_changed(DocumentKey("ana", "x"))
+
+    assert asyncio.run(run())
+    assert len(checker.checked) == 2
+    assert checker.words == [frozenset({"Shire"})] * 2

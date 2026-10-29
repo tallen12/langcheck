@@ -1,5 +1,6 @@
 """The FastAPI app, built from already constructed services."""
 
+import asyncio
 import math
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -21,6 +22,7 @@ from langcheck.auth.protocols import Authenticator
 from langcheck.check.protocols import TextChecker
 from langcheck.context.models import DocumentContext
 from langcheck.context.protocols import ContextSource
+from langcheck.dictionary.protocols import DictionaryStore
 from langcheck.documents.protocols import DocumentService
 from langcheck.limits.models import Permit, RateLimited
 from langcheck.limits.protocols import CheckLimiter
@@ -36,6 +38,7 @@ class Services:
     contexts: ContextSource
     limiter: CheckLimiter
     documents: DocumentService
+    dictionary: DictionaryStore
 
 
 type ServicesFactory = Callable[[], AbstractAsyncContextManager[Services]]
@@ -72,7 +75,9 @@ def build_app(services: ServicesFactory) -> FastAPI:
                 )
 
     app = FastAPI(title="langcheck", lifespan=lifespan)
-    app.include_router(document_router(lambda: current().documents, user))
+    app.include_router(
+        document_router(lambda: current().documents, lambda: current().dictionary, user)
+    )
 
     @app.get("/health")
     async def health() -> HealthResponse:
@@ -104,12 +109,15 @@ def build_app(services: ServicesFactory) -> FastAPI:
 
 
 async def _check(services: Services, body: CheckRequest, caller: User) -> CheckResponse:
+    words = list(body.dictionary)
+    if body.uri is not None:
+        words += await asyncio.to_thread(services.dictionary.words, caller.name, body.uri)
     if body.context is not None:
         context = body.context.to_context()
     else:
-        context = await _context_or_empty(services.contexts, body.text, body.dictionary)
+        context = await _context_or_empty(services.contexts, body.text, words)
     result = await services.checker.check(
-        body.text, user=caller.name, context=context, dictionary=body.dictionary
+        body.text, user=caller.name, context=context, dictionary=words
     )
     return CheckResponse.of(result, context)
 

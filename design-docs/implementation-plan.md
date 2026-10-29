@@ -269,7 +269,9 @@ All endpoints except `/health` require authentication. `{uri}` is URL-encoded.
 - `POST /documents/{uri}/suggestions/{sid}/accept` and `/dismiss`: accepting applies the
   chosen option and bumps the version; dismissing records the span and text so the same
   issue is not suggested again in this session.
-- `GET`, `POST`, `DELETE /documents/{uri}/dictionary`: list, add and remove words.
+- `GET`, `POST`, `DELETE /documents/{uri}/dictionary`: list, add and remove words
+  (`{"words": [...]}`; every call returns the sorted dictionary). Works whether or not
+  the document is open; an open document is re-checked, from the cache, at once.
 - `POST /check`: stateless one-shot check of a text (with an optional URI to use its
   dictionary), for the CLI and simple clients. Without a context in the request, the server builds one
   first and returns it with the suggestions.
@@ -283,7 +285,8 @@ All endpoints except `/health` require authentication. `{uri}` is URL-encoded.
 `remove(user, uri, words)`, `rename(user, old_uri, new_uri)`. The server config picks an
 implementation:
 
-- `memory`: for tests and throwaway servers;
+- `memory`: for tests and throwaway servers (unsaved `untitled:` documents always use
+  it, and their words move to the configured store when they are saved under a real URI);
 - `sql` (default): SQLAlchemy 2, SQLite file by default, Postgres by changing the URL.
   Migrations with Alembic once the schema first changes.
 

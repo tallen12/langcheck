@@ -18,6 +18,7 @@ from langcheck.check.apply import Applied, NoSuchOption, Stale, apply_option
 from langcheck.check.protocols import TextChecker
 from langcheck.context.models import DocumentContext
 from langcheck.context.protocols import ContextSource
+from langcheck.dictionary.protocols import DictionaryStore
 from langcheck.documents.events import Closed, DocumentEvent, Snapshot
 from langcheck.documents.models import (
     BuiltContext,
@@ -85,6 +86,7 @@ class DocumentSessions:
         contexts: ContextSource,
         splitter: SentenceSplitter,
         limiter: CheckLimiter,
+        dictionary: DictionaryStore,
         debounce: float = DEFAULT_DEBOUNCE,
         refresh_share: float = DEFAULT_REFRESH_SHARE,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -94,6 +96,7 @@ class DocumentSessions:
         self._contexts = contexts
         self._splitter = splitter
         self._limiter = limiter
+        self._dictionary = dictionary
         self._debounce = debounce
         self._refresh_share = refresh_share
         self._sleep = sleep
@@ -166,6 +169,20 @@ class DocumentSessions:
         self._publish(key, Snapshot.of(document))
         return True
 
+    async def dictionary_changed(self, key: DocumentKey) -> bool:
+        """Re-check the open document after its dictionary changed. Every sentence comes
+        from the cache, so only the dictionary filter runs again. ``False`` if not open.
+        """
+        async with self._lock(key):
+            current = await self._store.get(key)
+            if current is None:
+                return False
+            pending = replace(current, state=CheckState.PENDING)
+            await self._store.put(pending)
+        self._publish(key, Snapshot.of(pending))
+        self._schedule(key, pending.version)
+        return True
+
     async def close(self, key: DocumentKey) -> bool:
         """Close the document, cancelling its check; ``False`` when it was not open."""
         self._cancel(key)
@@ -190,6 +207,7 @@ class DocumentSessions:
                 return VersionConflict(existing.version)
             await self._store.delete(key)
             await self._store.put(replace(current, key=target))
+            await asyncio.to_thread(self._dictionary.rename, key.user, key.uri, new_uri)
         self._cancel(key)
         self._publish(key, Closed())
         self._watchers.pop(key, None)
@@ -267,9 +285,10 @@ class DocumentSessions:
             if document is None:
                 return
             try:
-                built = await self._context_for(document)
+                words = await asyncio.to_thread(self._dictionary.words, key.user, key.uri)
+                built = await self._context_for(document, words)
                 result = await self._checker.check(
-                    document.text, user=key.user, context=built.context
+                    document.text, user=key.user, context=built.context, dictionary=words
                 )
             except Exception:
                 await self._set_state(key, version, CheckState.FAILED)
@@ -300,7 +319,7 @@ class DocumentSessions:
         self._publish(key, Snapshot.of(document))
         return document
 
-    async def _context_for(self, document: Document) -> BuiltContext:
+    async def _context_for(self, document: Document, words: frozenset[str]) -> BuiltContext:
         """The document's context, rebuilt when enough of the text changed since."""
         hashes = tuple(s.hash for s in segment(document.text, splitter=self._splitter).sentences)
         built = document.context
@@ -309,7 +328,7 @@ class DocumentSessions:
             and changed_share(built.sentence_hashes, hashes) <= self._refresh_share
         ):
             return built
-        fresh = await self._contexts.build(document.text)
+        fresh = await self._contexts.build(document.text, dictionary=words)
         if isinstance(fresh, DocumentContext):
             return BuiltContext(fresh, hashes)
         # Keep checking with the old context (or none) rather than failing the check.

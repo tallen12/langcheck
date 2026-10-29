@@ -22,6 +22,7 @@ from langcheck.settings.models import (
     AuthSettings,
     CheckerSettings,
     DatabaseSettings,
+    DictionarySettings,
     HttpSettings,
     LimitsSettings,
     LLMSettings,
@@ -99,6 +100,7 @@ class ServerSettings(_LayeredSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    dictionary: DictionarySettings = Field(default_factory=DictionarySettings)
     checker: CheckerSettings = Field(default_factory=CheckerSettings)
     scorer: ScorerSettings = Field(default_factory=ScorerSettings)
     limits: LimitsSettings = Field(default_factory=LimitsSettings)
