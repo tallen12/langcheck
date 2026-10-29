@@ -70,11 +70,13 @@ class FixedContexts:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.built: list[str] = []
+        self.dictionaries: list[list[str]] = []
 
     async def build(
         self, text: str, *, dictionary: Collection[str] = ()
     ) -> DocumentContext | Failed:
         self.built.append(text)
+        self.dictionaries.append(sorted(dictionary))
         return Failed("no reply") if self.fail else CONTEXT
 
 
@@ -228,7 +230,8 @@ def test_check_answers_429_when_the_user_is_over_the_limit(checker: RecordingChe
 def test_check_adds_the_stored_dictionary_of_the_named_document(
     checker: RecordingChecker,
 ) -> None:
-    with client_for(checker, FixedContexts()) as client:
+    contexts = FixedContexts()
+    with client_for(checker, contexts) as client:
         client.post(
             "/check",
             json={"text": "Hi.", "dictionary": ["Bilbo"], "uri": "file:///notes.md"},
@@ -236,3 +239,6 @@ def test_check_adds_the_stored_dictionary_of_the_named_document(
         )
 
     assert sorted(checker.calls[0][3]) == ["Bilbo", "Frodo", "Shire"]
+    # Stored words filter suggestions but stay out of the context, so editing the
+    # dictionary keeps the context version and the cached results.
+    assert contexts.dictionaries == [["Bilbo"]]
