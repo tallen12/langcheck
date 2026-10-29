@@ -11,6 +11,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import override
+from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 from pydantic import BaseModel, Field
@@ -170,10 +171,42 @@ def load_settings[S: _LayeredSettings](
         _LAYERS.reset(token)
 
 
+MASK = "**********"
+
+
 def masked_dump(settings: BaseModel) -> dict[str, object]:
-    """``settings`` as plain JSON values with every secret masked, for ``config show``."""
-    data: object = json.loads(settings.model_dump_json())
+    """``settings`` as plain JSON values with every secret masked, for ``config show``.
+
+    Besides ``SecretStr`` fields, this masks passwords inside URLs, such as a database
+    URL ``postgresql://user:password@host/db``.
+    """
+    data: object = _mask_url_passwords(json.loads(settings.model_dump_json()))
     if not isinstance(data, dict):
         msg = "settings must dump to a mapping"
         raise TypeError(msg)
     return {str(key): value for key, value in data.items()}
+
+
+def _mask_url_passwords(value: object) -> object:
+    match value:
+        case dict():
+            return {key: _mask_url_passwords(item) for key, item in value.items()}
+        case list():
+            return [_mask_url_passwords(item) for item in value]
+        case str():
+            return _mask_url_password(value)
+        case _:
+            return value
+
+
+def _mask_url_password(text: str) -> str:
+    try:
+        parts = urlsplit(text)
+        password = parts.password
+    except ValueError:
+        return text
+    if password is None:
+        return text
+    user, _, host = parts.netloc.rpartition("@")
+    name = user.partition(":")[0]
+    return urlunsplit(parts._replace(netloc=f"{name}:{MASK}@{host}"))
