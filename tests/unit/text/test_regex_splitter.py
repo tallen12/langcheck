@@ -76,3 +76,18 @@ def test_custom_abbreviations_replace_the_defaults() -> None:
         "Mr.",
         "Smith left.",
     ]
+
+
+def test_numeral_abbreviations_only_hold_before_a_digit() -> None:
+    assert sentences("See No. 5 here. He said no. She left.") == [
+        "See No. 5 here.",
+        "He said no.",
+        "She left.",
+    ]
+
+
+def test_pronoun_i_ends_a_sentence() -> None:
+    assert sentences("She is taller than I. Then we left.") == [
+        "She is taller than I.",
+        "Then we left.",
+    ]

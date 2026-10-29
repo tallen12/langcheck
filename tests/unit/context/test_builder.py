@@ -20,7 +20,7 @@ REPLY = json.dumps(
         "summary": " A hobbit story. ",
         "register": "fiction-dialogue-heavy",
         "dialect": "en-GB",
-        "glossary": ["Bilbo", "Shire", " "],
+        "glossary": ["Bilbo", " Shire ", " "],
         "notes": "Past tense.",
     }
 )

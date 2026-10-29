@@ -22,6 +22,12 @@ def test_paragraphs_are_separated_by_blank_lines() -> None:
     assert [text[s.start : s.end] for s in paragraph_spans(text)] == ["One\nwrapped.", "Two."]
 
 
+def test_crlf_blank_lines_separate_paragraphs() -> None:
+    text = "One.\r\n\r\nTwo.\r\n"
+
+    assert [text[s.start : s.end] for s in paragraph_spans(text)] == ["One.", "Two."]
+
+
 def test_blank_text_has_no_paragraphs() -> None:
     assert paragraph_spans(" \n\n ") == []
     assert segment("", splitter=LineSplitter()).paragraphs == ()

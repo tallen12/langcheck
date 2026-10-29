@@ -148,6 +148,14 @@ def test_honours_retry_after_on_429() -> None:
     assert waits == [7.0]
 
 
+def test_ignores_a_retry_after_that_is_not_a_number() -> None:
+    server = Server([httpx.Response(429, headers={"Retry-After": "nan"}), completion("ok")])
+    client, waits = make_client(server)
+
+    assert client.complete(MESSAGES, options=ChatOptions()) == "ok"
+    assert waits == [1.0]
+
+
 def test_gives_up_after_the_last_retry() -> None:
     server = Server([httpx.Response(502, text="bad gateway")] * 3)
     client, waits = make_client(server, retries=2)

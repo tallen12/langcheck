@@ -5,6 +5,7 @@ Tested against Ollama 0.24, whose OpenAI-compatible endpoint ignores Ollama's ow
 ``ClientConfig.reasoning_switch`` is set.
 """
 
+import math
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -124,10 +125,14 @@ def retryable(status: int) -> bool:
 def retry_after_seconds(response: httpx.Response) -> float | None:
     """The server's ``Retry-After`` in seconds, when it sent a usable one."""
     value = response.headers.get(RETRY_AFTER)
+    if value is None:
+        return None
     try:
-        return max(float(value), 0.0) if value is not None else None
+        seconds = float(value)
     except ValueError:
         return None
+    # "nan" parses as a float but cannot be slept; "inf" is capped by max_backoff.
+    return max(seconds, 0.0) if not math.isnan(seconds) else None
 
 
 def describe(response: httpx.Response) -> str:
