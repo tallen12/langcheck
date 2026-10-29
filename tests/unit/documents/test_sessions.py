@@ -394,3 +394,69 @@ def test_session_checks_use_the_documents_dictionary() -> None:
     assert asyncio.run(run())
     assert len(checker.checked) == 2
     assert checker.words == [frozenset({"Shire"})] * 2
+
+
+def test_renaming_onto_the_same_uri_keeps_the_document() -> None:
+    sessions = make_sessions()
+
+    async def run() -> None:
+        await sessions.update(KEY, "Read teh book.")
+        await sessions.wait_idle()
+        assert await asyncio.wait_for(sessions.rename(KEY, KEY.uri), timeout=2) == Updated(1)
+        assert await sessions.get(KEY) is not None
+        assert await sessions.update(KEY, "Read the book.") == Updated(2)
+        await sessions.aclose()
+
+    asyncio.run(run())
+
+
+def test_crossed_renames_do_not_deadlock() -> None:
+    sessions = make_sessions()
+    other = DocumentKey("ana", "file:///other.md")
+
+    async def run() -> list[object]:
+        await sessions.update(KEY, "Read teh book.")
+        await sessions.update(other, "Other.")
+        await sessions.wait_idle()
+        return list(
+            await asyncio.wait_for(
+                asyncio.gather(sessions.rename(KEY, other.uri), sessions.rename(other, KEY.uri)),
+                timeout=2,
+            )
+        )
+
+    assert asyncio.run(run()) == [VersionConflict(1), VersionConflict(1)]
+
+
+def test_a_document_renamed_while_rate_limited_is_still_checked() -> None:
+    checker = TypoChecker()
+    limited = asyncio.Event()
+
+    async def sleep(seconds: float) -> None:
+        if seconds == 5.0:
+            limited.set()
+            await asyncio.Event().wait()
+        await asyncio.sleep(0)
+
+    sessions = DocumentSessions(
+        MemoryDocumentStore(),
+        checker=checker,
+        contexts=CountingContexts(),
+        splitter=RegexSentenceSplitter(),
+        limiter=LimitedOnce(),
+        dictionary=MemoryDictionaryStore(),
+        debounce=0.5,
+        sleep=sleep,
+    )
+    renamed = DocumentKey("ana", "file:///renamed.md")
+
+    async def run() -> CheckState | None:
+        await sessions.update(KEY, "Read teh book.")
+        await asyncio.wait_for(limited.wait(), timeout=2)
+        assert await sessions.rename(KEY, renamed.uri) == Updated(1)
+        await asyncio.wait_for(sessions.wait_idle(), timeout=2)
+        document = await sessions.get(renamed)
+        return document.state if document is not None else None
+
+    assert asyncio.run(run()) is CheckState.DONE
+    assert len(checker.checked) == 1

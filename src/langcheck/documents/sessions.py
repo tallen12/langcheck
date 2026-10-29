@@ -198,7 +198,13 @@ class DocumentSessions:
         told it closed. Renaming onto an open document is a conflict.
         """
         target = DocumentKey(key.user, new_uri)
-        async with self._lock(key), self._lock(target):
+        if target == key:
+            # The locks are not reentrant, so taking both would wait forever.
+            same = await self._store.get(key)
+            return Updated(same.version) if same is not None else NotOpen()
+        # A fixed lock order, so crossed renames (A to B, B to A) cannot deadlock.
+        first, second = sorted((key, target), key=lambda k: k.uri)
+        async with self._lock(first), self._lock(second):
             current = await self._store.get(key)
             if current is None:
                 return NotOpen()
@@ -211,7 +217,8 @@ class DocumentSessions:
         self._cancel(key)
         self._publish(key, Closed())
         self._watchers.pop(key, None)
-        if current.state in (CheckState.PENDING, CheckState.CHECKING):
+        # The cancelled check may have been waiting out the rate limit, too.
+        if current.state not in (CheckState.DONE, CheckState.FAILED):
             self._schedule(target, current.version)
         return Updated(current.version)
 
