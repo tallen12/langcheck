@@ -368,14 +368,15 @@ they override environment variables and the YAML file (see *Settings*). With
 it uses `llama3`. Every command takes `--config PATH`.
 
 - `langcheck check FILE [--json] [--local] [--no-score] [--apply]`: one-shot check,
-  printed as a diff with the ranked options; `--apply` walks through suggestions
-  interactively and writes the file.
+  printed as `FILE:LINE:COL: Kind: 'original' -> options` with the line and explanation;
+  `--apply` (not built yet) walks through suggestions interactively and writes the file.
+  Exits 0 when clean, 1 with suggestions or unchecked spans, 2 when it cannot run.
 - `langcheck watch FILE [--local]`: watches the file (`watchfiles`) and prints new and
   resolved suggestions as it changes.
 - `langcheck dict FILE [add|remove|list] [WORDS...]`: edit the document's dictionary.
 - `langcheck context FILE`: prints the document context, for tuning prompts.
-- `langcheck serve`, `langcheck lsp`, `langcheck admin ...`: run the service, the LSP
-  proxy, and manage users.
+- `langcheck serve`, `langcheck lsp`, `langcheck admin add-user|revoke|users`: run the
+  service, the LSP proxy, and manage API keys.
 - `langcheck config show [--server]`: print the merged client (or server) settings with
   secrets masked.
 
