@@ -39,11 +39,11 @@ class ScoringPolicy:
 
 PLL_DEFAULT = ScoringPolicy(
     {
-        # Tuned with `langcheck evaluate tune` on 1,000 BEA-2019 dev sentences (qwen3:8b,
-        # distilroberta-base) and checked on 200 held-out CoNLL-2014 sentences, where
-        # it dropped 28 wrong suggestions and no correct ones. The margins are PLL deltas,
-        # so they do not carry over to other scorers.
-        ErrorKind.WORD_BOUNDARY: KindPolicy(filter=True, margin=-0.0722),
-        ErrorKind.PUNCTUATION: KindPolicy(filter=True, margin=-0.2736),
+        # Tuned with `langcheck evaluate tune` on 1,000 BEA-2019 dev sentences checked
+        # with normal spacing (qwen3:8b, distilroberta-base; tuned margin 0.30351, rounded
+        # up so the suggestion it drops stays dropped). On 200 held-out CoNLL-2014
+        # sentences it dropped 16 wrong suggestions and 1 correct one, and tuning there
+        # picked 0.297. Margins are PLL deltas, so they do not carry over to other scorers.
+        ErrorKind.WORD_BOUNDARY: KindPolicy(filter=True, margin=0.304),
     }
 )

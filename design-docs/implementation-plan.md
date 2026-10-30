@@ -202,8 +202,8 @@ delta. Filtering is per error kind: a `ScoringPolicy` maps each `ErrorKind` to
 `filter: bool` and a `margin`, and drops an issue only when filtering is on for its kind
 and no option beats the original by the margin. M6 turns filtering on for the kinds
 where it raises precision without losing much recall. With PLL alone and no
-`scorer.policy` configured, the default filters WordBoundary (margin -0.072) and
-Punctuation (margin -0.274), as tuned in M6; other scorers filter nothing by default,
+`scorer.policy` configured, the default filters WordBoundary (margin 0.304), as tuned
+in M6; other scorers filter nothing by default,
 because the margins are PLL deltas, and `scorer.policy: {}` turns filtering off.
 
 The scorer is CPU or GPU bound. The service runs it in one worker thread behind a small
@@ -611,7 +611,18 @@ distilroberta-base):
   run-to-run LLM variation, so single runs compare loosely. With the BEA-tuned policy,
   a live run scored 0.310 (P 0.363, R 0.197, 27 suggestions filtered). Applied offline to
   the same LLM output as the 0.251 run, the policy dropped 28 wrong suggestions and no
-  correct ones, for 0.273. These two filters are the PLL default (see Scoring options).
+  correct ones, for 0.273. These runs checked sentences as tokens; the policy was
+  retuned after the switch to normal spacing (below).
+- With normal spacing (LLM alone, 200 CoNLL-2014 sentences), F0.5 rose from 0.270 to
+  0.284, mostly from fewer wrong Punctuation suggestions. On 1,000 BEA-2019 dev sentences
+  with PLL and no filtering it was 0.256 (was 0.239), and the LLM made 18 Punctuation
+  suggestions instead of 126: most had fixed the tokenized spacing. Retuning there left
+  only WordBoundary worth filtering, at margin 0.304 (drops 59 wrong suggestions and 3
+  correct, 0.256 -> 0.264); Punctuation now has too few suggestions to tune. On 200
+  held-out CoNLL-2014 sentences the same margin drops 16 wrong and 1 correct
+  (0.301 -> 0.313), and tuning CoNLL on its own picks 0.297. The previous two filters
+  gained no more on either set and on CoNLL dropped a correct Punctuation suggestion.
+  WordBoundary alone is the PLL default (see Scoring options).
 - Latency per chunk was p50 1.8 s and p90 3.3 s without a scorer, and p50 2.2–2.7 s and
   p90 5.4 s with PLL on CPU.
 - Validation rejected 63 of the LLM's issues on CoNLL-2014 (200 sentences) and 357 on
@@ -651,7 +662,7 @@ second feature that lands after it.
   accuracy.
 - **Does PLL scoring pay for its latency?** M6 measures it per kind. If the CoLA
   classifier alone does as well, drop PLL. So far PLL pays only through filtering
-  (WordBoundary and Punctuation, about +0.02 F0.5 on held-out data), at about 1 s more
+  (WordBoundary, about +0.01 F0.5 on held-out data), at about 1 s more
   per chunk at p50 and 2 s at p90 on CPU. CoLA has not been evaluated.
 - **Whole-sentence options vs span options.** The plan scores span replacements inside
   the original sentence. If the LLM often needs several linked edits (agreement across a

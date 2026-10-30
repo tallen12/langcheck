@@ -17,9 +17,10 @@ def test_filtered_kinds_need_an_option_that_beats_the_margin() -> None:
     assert policy.keeps(ErrorKind.SPELLING, -1.0)
 
 
-def test_the_pll_default_filters_only_word_boundary_and_punctuation() -> None:
+def test_the_pll_default_filters_only_word_boundary() -> None:
     filtered = {kind for kind in ErrorKind if PLL_DEFAULT.for_kind(kind).filter}
 
-    assert filtered == {ErrorKind.WORD_BOUNDARY, ErrorKind.PUNCTUATION}
-    assert PLL_DEFAULT.keeps(ErrorKind.PUNCTUATION, -0.2)
-    assert not PLL_DEFAULT.keeps(ErrorKind.PUNCTUATION, -0.3)
+    assert filtered == {ErrorKind.WORD_BOUNDARY}
+    assert PLL_DEFAULT.keeps(ErrorKind.WORD_BOUNDARY, 0.31)
+    assert not PLL_DEFAULT.keeps(ErrorKind.WORD_BOUNDARY, 0.30351)
+    assert PLL_DEFAULT.keeps(ErrorKind.PUNCTUATION, -1.0)
