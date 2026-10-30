@@ -1,6 +1,7 @@
 from collections import Counter
 
 from langcheck.check.resolve import RejectionReason
+from langcheck.evaluation.closeness import Closeness
 from langcheck.evaluation.report import (
     Latency,
     Report,
@@ -26,6 +27,7 @@ def sentence(
         unchecked=unchecked,
         filtered=1,
         top_n=(score.overall, best_of_two, best_of_two, best_of_two),
+        closeness=Closeness(needed=score.overall.tp + score.overall.fn, gain=1 - unchecked),
     )
 
 
@@ -34,7 +36,7 @@ RUN = RunResult(
         sentence(
             Score(Counts(tp=1, fp=1), {ErrorKind.SPELLING: Counts(tp=1), None: Counts(fp=1)}),
             1.0,
-            SuggestionOutcome(ErrorKind.SPELLING, 2.0, Effect.CORRECT),
+            SuggestionOutcome(ErrorKind.SPELLING, 2.0, Effect.CORRECT, gain=2),
         ),
         sentence(Score(Counts(fn=1), {ErrorKind.DETERMINER: Counts(fn=1)}), 3.0, unchecked=True),
     )
@@ -91,10 +93,13 @@ def test_render_report_lists_kinds_then_overall() -> None:
     assert text.splitlines()[0].startswith("conll14-test: 2 sentences, model qwen3:8b")
     assert "Spelling" in text
     lines = text.splitlines()
-    assert lines[-8].startswith("overall")
-    assert lines[-7] == "best of the first n options:"
-    assert lines[-6].startswith("top-1")
-    assert lines[-3].startswith("top-4")
+    overall = lines.index(next(line for line in lines if line.startswith("overall")))
+    assert lines[overall + 1] == "best of the first n options:"
+    assert lines[overall + 2].startswith("top-1")
+    assert lines[overall + 5].startswith("top-4")
+    assert lines[overall + 6] == "closeness: +1 of 2 word edits needed (+50.0%)"
+    assert lines[overall + 7].split() == ["by", "suggested", "kind", "n", "gain"]
+    assert lines[overall + 8].split() == ["Spelling", "1", "+2"]
     assert "rejected: not_found 2; unchecked: 1; filtered: 2" in text
     assert "p90 3.0" in text
 
@@ -127,3 +132,15 @@ def test_reports_count_sentences_checked_as_tokens() -> None:
 
     assert report.tokenized == 1
     assert "checked as tokens: 1" in render_report(report)
+
+
+def test_reports_from_before_closeness_load_and_render_without_it() -> None:
+    data = make().model_dump()
+    del data["closeness"]
+    for outcome in data["outcomes"]:
+        del outcome["gain"]
+
+    old = Report.model_validate(data)
+
+    assert (old.closeness, old.outcomes[0].gain) == (None, None)
+    assert "closeness" not in render_report(old)

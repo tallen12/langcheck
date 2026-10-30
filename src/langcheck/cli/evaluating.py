@@ -13,6 +13,7 @@ from cyclopts import App, Parameter
 from langcheck.check.prompt import PROMPT_VERSION
 from langcheck.cli.checking import open_local
 from langcheck.cli.environment import CliEnvironment
+from langcheck.evaluation.closeness import Closeness
 from langcheck.evaluation.datasets import SOURCES, Dataset, dataset_files, fetch
 from langcheck.evaluation.examples import Example, load_examples
 from langcheck.evaluation.protocols import EditAnnotator
@@ -23,6 +24,8 @@ from langcheck.evaluation.tuning import (
     DEFAULT_MAX_RECALL_LOSS,
     DEFAULT_MIN_GAIN,
     DEFAULT_MIN_SUGGESTIONS,
+    Objective,
+    TuningError,
     describe,
     policy_yaml,
     tune,
@@ -152,18 +155,32 @@ def evaluate_app(env: CliEnvironment, *, settings: SettingsLoader, guarded: Guar
         min_suggestions: Annotated[
             int, Parameter(help="Scored suggestions a kind needs before it is tuned.")
         ] = DEFAULT_MIN_SUGGESTIONS,
+        objective: Annotated[
+            Objective, Parameter(help="Judge filters by overall F0.5 or by closeness.")
+        ] = Objective.F05,
     ) -> int:
         """Choose per-kind filtering from a scored run; print the scorer.policy YAML."""
 
         def run() -> int:
             loaded = _read(report)
-            decisions = tune(
-                loaded.outcomes,
-                Counts(loaded.overall.tp, loaded.overall.fp, loaded.overall.fn),
-                min_gain=min_gain,
-                max_recall_loss=max_recall_loss,
-                min_suggestions=min_suggestions,
+            closeness = (
+                Closeness(loaded.closeness.needed, loaded.closeness.gain)
+                if loaded.closeness is not None
+                else None
             )
+            try:
+                decisions = tune(
+                    loaded.outcomes,
+                    Counts(loaded.overall.tp, loaded.overall.fp, loaded.overall.fn),
+                    objective=objective,
+                    closeness=closeness,
+                    min_gain=min_gain,
+                    max_recall_loss=max_recall_loss,
+                    min_suggestions=min_suggestions,
+                )
+            except TuningError as error:
+                env.err(f"langcheck: {error}")
+                return FAILED
             if not decisions:
                 env.err("langcheck: the report has no scored suggestions; run with a scorer")
                 return FAILED

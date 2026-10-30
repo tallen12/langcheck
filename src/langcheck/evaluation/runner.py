@@ -4,7 +4,7 @@ import asyncio
 import time
 from collections import Counter
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from langcheck.check.checker import CheckResult
@@ -13,6 +13,7 @@ from langcheck.check.reply import MAX_OPTIONS
 from langcheck.check.resolve import RejectionReason
 from langcheck.check.suggestion import Scored, Suggestion
 from langcheck.context.models import DocumentContext
+from langcheck.evaluation.closeness import Closeness, closeness, reference
 from langcheck.evaluation.examples import Example
 from langcheck.evaluation.models import EditKey, ScoredEdit
 from langcheck.evaluation.protocols import EditAnnotator
@@ -46,6 +47,8 @@ class SuggestionOutcome:
     kind: ErrorKind
     delta: float | None
     effect: Effect
+    gain: int = 0
+    """Word edits it saves toward the closest reference, applied alone (``closeness``)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +67,8 @@ class SentenceResult:
     unchecked: bool
     filtered: int
     top_n: tuple[Counts, ...] = ()
+    closeness: Closeness = field(default_factory=Closeness)
+    """How far all the suggestions together move the sentence toward a reference."""
     tokenized: bool = False
     """Whether the checker got the tokens joined by spaces, not normal spacing."""
 
@@ -78,6 +83,11 @@ class RunResult:
     def score(self) -> Score:
         """The scores summed over sentences."""
         return sum((s.score for s in self.sentences), Score())
+
+    @property
+    def closeness(self) -> Closeness:
+        """Closeness summed over sentences."""
+        return sum((s.closeness for s in self.sentences), Closeness())
 
     @property
     def top_n(self) -> tuple[Counts, ...]:
@@ -133,7 +143,10 @@ def score_all(
     sentences: list[SentenceResult] = []
     for example, (result, seconds) in zip(examples, checks, strict=True):
         edits = _EditCache(example, annotator)
-        system = edits.of(apply_best(example.text, result.suggestions))
+        references = [reference(example.source, gold) for gold in example.annotators]
+        before = edits.tokens(example.text)
+        corrected = apply_best(example.text, result.suggestions)
+        system = edits.of(corrected)
         index, score = best_annotator(system, example.annotators, running=running)
         running += score.overall
         top_n = _top_n(example, result.suggestions, edits, running=running_top)
@@ -142,12 +155,14 @@ def score_all(
         gold_keys = {edit.key for edit in gold}
         outcomes = []
         for suggestion in result.suggestions:
-            alone = edits.of(apply_best(example.text, [suggestion]))
+            alone_text = apply_best(example.text, [suggestion])
+            alone = edits.of(alone_text)
             outcomes.append(
                 SuggestionOutcome(
                     kind=suggestion.kind,
                     delta=_delta(suggestion),
                     effect=_effect(alone, gold_keys),
+                    gain=closeness(before, edits.tokens(alone_text), references).gain,
                 )
             )
         sentences.append(
@@ -159,6 +174,7 @@ def score_all(
                 unchecked=bool(result.unchecked),
                 filtered=len(result.filtered),
                 top_n=top_n,
+                closeness=closeness(before, edits.tokens(corrected), references),
                 tokenized=example.tokenized,
             )
         )
@@ -184,17 +200,25 @@ def apply_best(text: str, suggestions: Sequence[Suggestion]) -> str:
 
 
 class _EditCache:
-    """One example's system edits per corrected text, so each text runs ERRANT once."""
+    """One example's system edits and tokens per corrected text, so each text runs
+    ERRANT once for each.
+    """
 
     def __init__(self, example: Example, annotator: EditAnnotator) -> None:
         self._example = example
         self._annotator = annotator
         self._edits: dict[str, list[ScoredEdit]] = {}
+        self._tokens: dict[str, list[str]] = {}
 
     def of(self, corrected: str) -> list[ScoredEdit]:
         if corrected not in self._edits:
             self._edits[corrected] = self._annotator.system_edits(self._example.source, corrected)
         return self._edits[corrected]
+
+    def tokens(self, text: str) -> list[str]:
+        if text not in self._tokens:
+            self._tokens[text] = self._annotator.tokenize(text)
+        return self._tokens[text]
 
 
 def _top_n(

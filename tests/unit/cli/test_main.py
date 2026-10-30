@@ -445,3 +445,7 @@ def test_evaluate_tune_prints_the_policy(cli: Cli, tmp_path: Path) -> None:
 
     assert "Punctuation            filter above 0.200" in cli.output
     assert cli.output.endswith("    Punctuation:\n      filter: true\n      margin: 0.2")
+    cli.out.clear()
+
+    assert cli("evaluate", "tune", str(path), "--objective", "closeness") == FAILED
+    assert "no closeness; rerun it" in cli.err[-1]

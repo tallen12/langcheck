@@ -1,12 +1,24 @@
+import pytest
+
+from langcheck.evaluation.closeness import Closeness
 from langcheck.evaluation.report import Outcome
 from langcheck.evaluation.runner import Effect
 from langcheck.evaluation.scoring import Counts
-from langcheck.evaluation.tuning import KindDecision, Verdict, describe, policy_yaml, tune
+from langcheck.evaluation.tuning import (
+    KindDecision,
+    Objective,
+    TuningError,
+    Verdict,
+    describe,
+    policy_yaml,
+    tune,
+)
 from langcheck.scoring.policy import KindPolicy, ScoringPolicy
 from langcheck.taxonomy.kinds import ErrorKind
 
 PUNCT = ErrorKind.PUNCTUATION
 OVERALL = Counts(tp=10, fp=10, fn=20)
+F05 = OVERALL.f05
 
 
 def outcome(kind: ErrorKind, delta: float | None, correct: bool) -> Outcome:
@@ -32,8 +44,8 @@ def test_filters_a_kind_whose_low_deltas_are_wrong_judged_on_overall_f05() -> No
         correct=2,
         dropped_correct=0,
         dropped_wrong=3,
-        before=OVERALL,
-        after=Counts(tp=10, fp=7, fn=20),
+        before=F05,
+        after=Counts(tp=10, fp=7, fn=20).f05,
     )
     assert decision.filter
 
@@ -55,7 +67,7 @@ def test_kinds_with_too_few_scored_suggestions_are_not_tuned() -> None:
     [decision] = tune(outcomes, OVERALL)
     [tuned] = tune(outcomes, OVERALL, min_suggestions=2)
 
-    assert decision == KindDecision(PUNCT, Verdict.TOO_FEW, 0.0, 2, 1, 0, 0, OVERALL, OVERALL)
+    assert decision == KindDecision(PUNCT, Verdict.TOO_FEW, 0.0, 2, 1, 0, 0, F05, F05)
     assert tuned.filter
 
 
@@ -81,11 +93,11 @@ def test_the_margin_drops_exactly_the_suggestions_tuning_measured() -> None:
 
 
 def filtering(margin: float) -> KindDecision:
-    return KindDecision(PUNCT, Verdict.FILTER, margin, 29, 1, 0, 24, OVERALL, OVERALL)
+    return KindDecision(PUNCT, Verdict.FILTER, margin, 29, 1, 0, 24, F05, F05)
 
 
 def test_policy_yaml_lists_only_filtered_kinds_with_exact_margins() -> None:
-    off = KindDecision(ErrorKind.SPELLING, Verdict.NO_GAIN, 0.0, 30, 9, 0, 0, OVERALL, OVERALL)
+    off = KindDecision(ErrorKind.SPELLING, Verdict.NO_GAIN, 0.0, 30, 9, 0, 0, F05, F05)
 
     assert policy_yaml([filtering(1.5099225401878353), off]) == (
         "scorer:\n  policy:\n    Punctuation:\n      filter: true\n"
@@ -99,7 +111,7 @@ def test_describe_rounds_the_margin_for_reading_only() -> None:
 
     assert line.split()[:4] == ["Punctuation", "filter", "above", "1.510"]
     assert "29 suggestions,   1 correct, drops  24 wrong and  0 correct" in line
-    too_few = KindDecision(PUNCT, Verdict.TOO_FEW, 0.0, 3, 0, 0, 0, OVERALL, OVERALL)
+    too_few = KindDecision(PUNCT, Verdict.TOO_FEW, 0.0, 3, 0, 0, 0, F05, F05)
     assert "too few to tune" in describe(too_few)
 
 
@@ -126,3 +138,42 @@ def test_suggestions_with_no_effect_are_ignored() -> None:
 
     assert (decision.suggestions, decision.correct) == (1, 1)
     assert decision.verdict is Verdict.NO_GAIN
+
+
+def test_closeness_weighs_wrong_suggestions_by_how_far_they_move_away() -> None:
+    # One wrong rewrite undoes 10 word edits: worth filtering on closeness, while on
+    # F0.5 it is a single false positive among several.
+    def scored(delta: float, *, correct: bool, gain: int) -> Outcome:
+        effect = Effect.CORRECT if correct else Effect.WRONG
+        return Outcome(kind=ErrorKind.WORD_ORDER, delta=delta, effect=effect, gain=gain)
+
+    outcomes = [scored(0.1, correct=False, gain=-10), scored(0.5, correct=True, gain=1)]
+    outcomes += [scored(1.0, correct=True, gain=1)] * 9
+    total = Closeness(needed=100, gain=0)
+
+    [by_f05] = tune(outcomes, Counts(tp=40, fp=10, fn=50), min_suggestions=1, min_gain=0.01)
+    [decision] = tune(
+        outcomes,
+        Counts(tp=40, fp=10, fn=50),
+        objective=Objective.CLOSENESS,
+        closeness=total,
+        min_suggestions=1,
+        min_gain=0.01,
+    )
+
+    assert not by_f05.filter
+    assert (decision.verdict, decision.margin, decision.dropped_wrong) == (Verdict.FILTER, 0.1, 1)
+    assert (decision.before, decision.after) == (0.0, 0.1)
+    assert describe(decision).endswith("closeness +0.0% -> +10.0%")
+
+
+def test_closeness_needs_a_report_that_kept_it() -> None:
+    with pytest.raises(TuningError, match="no closeness"):
+        tune([outcome(PUNCT, 0.1, False)], OVERALL, objective=Objective.CLOSENESS)
+    with pytest.raises(TuningError, match="no closeness"):
+        tune(
+            [outcome(PUNCT, 0.1, False)],
+            OVERALL,
+            objective=Objective.CLOSENESS,
+            closeness=Closeness(10, 1),
+        )

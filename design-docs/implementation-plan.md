@@ -599,6 +599,15 @@ first n options scores best against the gold edits. Top-1 is the normal score; t
 from top-1 to top-4 bounds what better option ranking could gain, since the right fix
 was among the LLM's options but not ranked first.
 
+Reports also measure closeness: the word-level edit distance from each sentence to
+its closest reference (the source with one annotator's gold edits applied), before
+and after the checker's changes. The gain is how many word edits the changes saved,
+negative when they moved the sentence further away. Exact matching gives no credit to
+a fix split differently from the gold edit or one that gets most of the way, and
+counts a ten-word bad rewrite as about one false positive; closeness counts every
+word. Reports give the overall gain as a share of the edits needed and the gain per
+kind the LLM gave, and `evaluate tune --objective closeness` judges filters by it.
+
 Results (qwen3:8b through Ollama with reasoning off, prompt check-v1, PLL with
 distilroberta-base):
 

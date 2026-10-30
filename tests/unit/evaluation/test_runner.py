@@ -7,6 +7,7 @@ from langcheck.check.reply import ReplyIssue
 from langcheck.check.resolve import Rejection, RejectionReason
 from langcheck.check.suggestion import Option, Scored, Suggestion, suggestion_id
 from langcheck.context.models import DocumentContext
+from langcheck.evaluation.closeness import Closeness
 from langcheck.evaluation.examples import Example
 from langcheck.evaluation.models import ScoredEdit
 from langcheck.evaluation.runner import EVALUATION_USER, Effect, apply_best, check_all, evaluate
@@ -100,6 +101,10 @@ def test_evaluate_scores_sentences_and_suggestions() -> None:
         Counts(tp=2, fp=1, fn=0),
     )
     go, fine = run.sentences
+    assert [o.gain for o in go.outcomes] == [1, 0]
+    assert [o.gain for o in fine.outcomes] == [-1]
+    assert (go.closeness, fine.closeness) == (Closeness(2, 1), Closeness(0, -1))
+    assert run.closeness == Closeness(2, 0)
     assert go.tokenized
     assert go.top_n[0] == go.score.overall
     assert [(o.kind, o.delta, o.effect) for o in go.outcomes] == [
