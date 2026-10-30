@@ -18,8 +18,9 @@ from tests.conftest import TokenDiffAnnotator
 GO = Example(
     ("He", "go", "teh", "way", "."),
     ((ScoredEdit(1, 2, ("goes",), None), ScoredEdit(2, 3, ("the",), None)),),
+    "He go teh way .",
 )
-FINE = Example(("All", "fine", "."), ((),))
+FINE = Example(("All", "fine", "."), ((),), "All fine .")
 
 
 def suggestion(
@@ -99,6 +100,7 @@ def test_evaluate_scores_sentences_and_suggestions() -> None:
         Counts(tp=2, fp=1, fn=0),
     )
     go, fine = run.sentences
+    assert go.tokenized
     assert go.top_n[0] == go.score.overall
     assert [(o.kind, o.delta, o.effect) for o in go.outcomes] == [
         (ErrorKind.SUBJECT_VERB_AGREEMENT, 2.0, Effect.CORRECT),

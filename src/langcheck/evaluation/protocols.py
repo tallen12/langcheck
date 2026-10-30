@@ -21,3 +21,7 @@ class EditAnnotator(Protocol):
     def gold_edits(self, source: Sequence[str], edits: Sequence[GoldEdit]) -> list[ScoredEdit]:
         """``edits`` from an M2 file, with their kinds."""
         ...
+
+    def tokenize(self, text: str) -> list[str]:
+        """The tokens ``system_edits`` would split ``text`` into."""
+        ...

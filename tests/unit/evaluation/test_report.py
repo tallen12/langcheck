@@ -115,3 +115,15 @@ def test_compare_reports_shows_the_change_per_kind() -> None:
 
 def test_latency_of_nothing_is_zero() -> None:
     assert Latency.of([]) == Latency(count=0, mean=0.0, p50=0.0, p90=0.0, max=0.0)
+
+
+def test_reports_count_sentences_checked_as_tokens() -> None:
+    tokenized = SentenceResult(
+        Score(), 1.0, (), Counter(), unchecked=False, filtered=0, tokenized=True
+    )
+    run = RunResult((*RUN.sentences, tokenized))
+
+    report = build_report(run, dataset="d", model="m", prompt_version="p", scorer="s")
+
+    assert report.tokenized == 1
+    assert "checked as tokens: 1" in render_report(report)

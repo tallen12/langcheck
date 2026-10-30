@@ -17,9 +17,13 @@ class NoEdits:
     def gold_edits(self, source: Sequence[str], edits: Sequence[GoldEdit]) -> list[ScoredEdit]:
         return [ScoredEdit(e.start, e.end, e.correction, None) for e in edits]
 
+    def tokenize(self, text: str) -> list[str]:
+        return text.split()
+
 
 def test_edit_annotator_contract() -> None:
     annotator: EditAnnotator = NoEdits()
 
     assert annotator.system_edits(("a",), "a") == []
     assert annotator.gold_edits(("a",), [GoldEdit(0, 1, ("b",), "R:OTHER")])[0].correction == ("b",)
+    assert annotator.tokenize("a b") == ["a", "b"]

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import assert_never
 
 from langcheck.evaluation.datasets import SOURCES, Dataset, DatasetError, Format
+from langcheck.evaluation.detokenize import detokenize
 from langcheck.evaluation.m2 import read_m2
 from langcheck.evaluation.models import ScoredEdit
 from langcheck.evaluation.protocols import EditAnnotator
@@ -13,15 +14,29 @@ from langcheck.evaluation.protocols import EditAnnotator
 
 @dataclass(frozen=True, slots=True)
 class Example:
-    """One sentence to check and the gold edits of every annotator."""
+    """One sentence to check, the text the checker gets, and every annotator's gold
+    edits. Gold edits index ``source``; ERRANT aligns the checker's correction of
+    ``text`` with ``source`` again.
+    """
 
     source: tuple[str, ...]
     annotators: tuple[tuple[ScoredEdit, ...], ...]
+    text: str
 
     @property
-    def text(self) -> str:
-        """The sentence as the checker gets it: tokens joined by spaces."""
-        return " ".join(self.source)
+    def tokenized(self) -> bool:
+        """Whether ``text`` is the tokens joined by spaces, not normal spacing."""
+        return self.text == " ".join(self.source)
+
+
+def checked_text(source: Sequence[str], annotator: EditAnnotator) -> str:
+    """``source`` with normal spacing, or joined by spaces if the annotator would not
+    split the normally spaced text into exactly ``source``: the sets' own tokenization
+    differs from spaCy's in places ("he / she", "haven't"), and every difference would
+    count as an edit the checker made.
+    """
+    text = detokenize(source)
+    return text if annotator.tokenize(text) == list(source) else " ".join(source)
 
 
 def load_examples(
@@ -40,6 +55,7 @@ def load_examples(
                 Example(
                     s.tokens,
                     tuple(tuple(annotator.gold_edits(s.tokens, edits)) for edits in s.annotators),
+                    checked_text(s.tokens, annotator),
                 )
                 for s in sentences
             ]
@@ -55,7 +71,7 @@ def load_examples(
                     tuple(annotator.reference_edits(tokens, lines[index].split()))
                     for lines in references
                 )
-                examples.append(Example(tokens, annotators))
+                examples.append(Example(tokens, annotators, checked_text(tokens, annotator)))
             return examples
         case unreachable:
             assert_never(unreachable)

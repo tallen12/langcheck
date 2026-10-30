@@ -64,6 +64,8 @@ class SentenceResult:
     unchecked: bool
     filtered: int
     top_n: tuple[Counts, ...] = ()
+    tokenized: bool = False
+    """Whether the checker got the tokens joined by spaces, not normal spacing."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +159,7 @@ def score_all(
                 unchecked=bool(result.unchecked),
                 filtered=len(result.filtered),
                 top_n=top_n,
+                tokenized=example.tokenized,
             )
         )
     return RunResult(tuple(sentences))

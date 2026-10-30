@@ -95,6 +95,11 @@ class Report(BaseModel):
     rejections: dict[str, int]
     unchecked: int
     filtered: int
+    tokenized: int = 0
+    """Sentences checked as space-joined tokens, because normal spacing would not
+    tokenize back to the set's tokens. Reports made before this field checked every
+    sentence that way but show 0.
+    """
     latency: Latency
     outcomes: Annotated[list[Outcome], Field(default_factory=list)]
     top_n: Annotated[list[KindScore], Field(default_factory=list)]
@@ -127,6 +132,7 @@ def build_report(
         rejections={reason.value: count for reason, count in sorted(run.rejections.items())},
         unchecked=sum(s.unchecked for s in run.sentences),
         filtered=sum(s.filtered for s in run.sentences),
+        tokenized=sum(s.tokenized for s in run.sentences),
         latency=Latency.of([s.seconds for s in run.sentences]),
         outcomes=[
             Outcome(kind=o.kind, delta=o.delta, effect=o.effect)
@@ -152,7 +158,7 @@ def render_report(report: Report) -> str:
             header,
             *rows,
             f"rejected: {rejected or 'none'}; unchecked: {report.unchecked}; "
-            f"filtered: {report.filtered}",
+            f"filtered: {report.filtered}; checked as tokens: {report.tokenized}",
             f"seconds per chunk: mean {latency.mean}, p50 {latency.p50}, p90 {latency.p90}, "
             f"max {latency.max}",
         ]

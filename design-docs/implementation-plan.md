@@ -585,6 +585,15 @@ needs 20 scored suggestions before it is tuned (`--min-suggestions`); on 200 CoN
 sentences, smaller kinds "gained" up to 0.3 F0.5 from noise. The comparison with contcheck's tagger
 needs contcheck's own run on the same sets and is not part of this command.
 
+The sets store sentences as space-separated tokens ("The law 's spirit ."). Checked
+that way, the LLM missed errors it caught with normal spacing and suggested spacing
+fixes, so `evaluate run` checks each sentence with normal spacing and ERRANT
+re-tokenizes the correction to score it against the set's tokens. Where spaCy would
+not split the normally spaced sentence back into exactly the set's tokens ("he / she",
+"haven't" kept whole), the sentence is checked as tokens instead, so tokenization
+differences never count as edits; the report counts these (about 10% of CoNLL-2014,
+1% of BEA-2019 dev). Runs before this change checked every sentence as tokens.
+
 Reports also give top-n scores for n = 1 to 4: each suggestion takes whichever of its
 first n options scores best against the gold edits. Top-1 is the normal score; the rise
 from top-1 to top-4 bounds what better option ranking could gain, since the right fix

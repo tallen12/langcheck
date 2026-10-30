@@ -74,3 +74,16 @@ def test_gold_edits_with_other_categories_are_typed_by_errant(
         (1, 2, ("got",), ErrorKind.VERB_TENSE),
         (3, 4, ("diseases",), ErrorKind.NOUN_NUMBER),
     ]
+
+
+def test_tokenize_splits_like_errant_parses_a_correction(annotator: ErrantEditAnnotator) -> None:
+    assert annotator.tokenize("The law's spirit isn't clear.") == [
+        "The",
+        "law",
+        "'s",
+        "spirit",
+        "is",
+        "n't",
+        "clear",
+        ".",
+    ]
