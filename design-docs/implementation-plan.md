@@ -202,8 +202,9 @@ delta. Filtering is per error kind: a `ScoringPolicy` maps each `ErrorKind` to
 `filter: bool` and a `margin`, and drops an issue only when filtering is on for its kind
 and no option beats the original by the margin. M6 turns filtering on for the kinds
 where it raises precision without losing much recall. With PLL alone and no
-`scorer.policy` configured, the default filters WordBoundary (margin 0.304), as tuned
-in M6; other scorers filter nothing by default,
+`scorer.policy` configured, the default filters Spelling (margin -0.382),
+WordBoundary (0.3305) and WordOrder (-0.232), as tuned on closeness in M6; other
+scorers filter nothing by default,
 because the margins are PLL deltas, and `scorer.policy: {}` turns filtering off.
 
 The scorer is CPU or GPU bound. The service runs it in one worker thread behind a small
@@ -631,7 +632,19 @@ distilroberta-base):
   held-out CoNLL-2014 sentences the same margin drops 16 wrong and 1 correct
   (0.301 -> 0.313), and tuning CoNLL on its own picks 0.297. The previous two filters
   gained no more on either set and on CoNLL dropped a correct Punctuation suggestion.
-  WordBoundary alone is the PLL default (see Scoring options).
+  WordBoundary alone was then the PLL default.
+- Closeness showed what F0.5 hid. Without filters the checker moved sentences away
+  from the references overall (BEA-2019 -124 of 3,501 needed word edits, CoNLL-2014
+  -18 of 654), and suggestions the LLM labelled WordOrder did most of it (-208 and -51
+  words). The LLM's labels mostly disagree with the edits it makes (37% agree; 4% for
+  WordBoundary, 5% for WordOrder), and those two labels mark rewrites it could not
+  classify, which are rarely right. Tuning on closeness with the 10% recall limit
+  filters Spelling (-0.382), WordBoundary (0.3305) and WordOrder (-0.232). On held-out
+  CoNLL-2014 they drop 30 wrong suggestions and 3 correct: F0.5 0.274 -> 0.291 and
+  closeness -2.8% -> +2.4%, against 0.288 and -0.5% for WordBoundary alone. These
+  three filters are the PLL default (see Scoring options). Dropping every WordOrder
+  suggestion did better on CoNLL (0.296, +7.3%) but loses more correct suggestions
+  (16 on BEA-2019) and was not chosen.
 - Latency per chunk was p50 1.8 s and p90 3.3 s without a scorer, and p50 2.2–2.7 s and
   p90 5.4 s with PLL on CPU.
 - Validation rejected 63 of the LLM's issues on CoNLL-2014 (200 sentences) and 357 on
@@ -671,7 +684,8 @@ second feature that lands after it.
   accuracy.
 - **Does PLL scoring pay for its latency?** M6 measures it per kind. If the CoLA
   classifier alone does as well, drop PLL. So far PLL pays only through filtering
-  (WordBoundary, about +0.01 F0.5 on held-out data), at about 1 s more
+  (Spelling, WordBoundary and WordOrder: about +0.02 F0.5 and +5% of needed edits on
+  held-out data), at about 1 s more
   per chunk at p50 and 2 s at p90 on CPU. CoLA has not been evaluated.
 - **Whole-sentence options vs span options.** The plan scores span replacements inside
   the original sentence. If the LLM often needs several linked edits (agreement across a
