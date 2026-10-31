@@ -2,11 +2,18 @@
 
 import asyncio
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Final
 
 from langcheck.correction.kind_guess import guess_kind
-from langcheck.correction.models import CorrectionPolicy, FlaggedSentence, Pending, Unavailable
+from langcheck.correction.models import (
+    AbstainGate,
+    CandidateOrder,
+    CorrectionPolicy,
+    FlaggedSentence,
+    Pending,
+    Unavailable,
+)
 from langcheck.correction.place import place_corrections
 from langcheck.correction.schemas import ReplyCorrection
 from langcheck.proposal.protocols import Proposal, ProposalRequest, ProposalSource
@@ -18,6 +25,13 @@ from langcheck.tagging.protocols import SentenceReader
 
 JUDGED: Final = 8
 """Proposals per flag that reach the filters, so rejected ones leave others to offer."""
+
+
+def proposer_policy(policy: CorrectionPolicy) -> CorrectionPolicy:
+    """``policy`` as a proposer needs it: its re-ranked order stands, and the gate decides
+    what is shown and how confidently.
+    """
+    return replace(policy, order=CandidateOrder.AS_WRITTEN, gate=AbstainGate())
 
 
 def word_span(spans: Sequence[CharSpan], flag: CharSpan) -> WordSpan:
@@ -39,7 +53,8 @@ def _raw(reading: SentenceReading) -> float:
 @dataclass(frozen=True, slots=True)
 class ProposerCorrector:
     """A ``Corrector`` needing no server, so a flag is never unavailable. A "keep" answer is
-    dropped rather than obeyed: it ranks first on too many real errors to hide a fix.
+    dropped rather than obeyed: it ranks first on too many real errors to hide a fix, and
+    adds nothing to the gate beyond the signals in :class:`AbstainGate`.
     """
 
     source: ProposalSource
@@ -82,12 +97,15 @@ class ProposerCorrector:
             entries: list[Pending | Unavailable] = []
             for flag, proposals in zip(item.flags, per_flag, strict=True):
                 original = _flag_text(item, flag.span)
-                corrections = [
-                    _correction(original, s.text) for s in reranked(proposals, self.rerank)[:JUDGED]
-                ]
-                entries.append(
-                    place_corrections(corrections, item, flag, policy=self.policy, limit=JUDGED)
+                chosen = reranked(proposals, self.rerank)[:JUDGED]
+                placed = place_corrections(
+                    [_correction(original, s.text) for s in chosen],
+                    item,
+                    flag,
+                    policy=self.policy,
+                    limit=JUDGED,
                 )
+                entries.append(_with_beliefs(placed, chosen))
             results.append(entries)
         return results
 
@@ -143,6 +161,16 @@ class ProposerCorrector:
                 ]
             )
         return results
+
+
+def _with_beliefs(placed: Pending, chosen: Sequence[Scored]) -> Pending:
+    """``placed``, its candidates knowing the belief of the proposal each came from."""
+    return replace(
+        placed,
+        candidates=tuple(
+            replace(c, belief=chosen[c.position].log_probability) for c in placed.candidates
+        ),
+    )
 
 
 def _flag_text(item: FlaggedSentence, span: CharSpan) -> str:

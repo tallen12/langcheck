@@ -1,5 +1,9 @@
+from dataclasses import replace
+
 from langcheck.correction.models import (
+    AbstainGate,
     Candidate,
+    CandidateOrder,
     Confidence,
     Corrected,
     CorrectionPolicy,
@@ -125,3 +129,48 @@ def test_nothing_to_judge_does_not_call_the_tagger() -> None:
     rank_corrections([pending], PairedReader(tagger), tiers=TIERS, policy=CorrectionPolicy())
 
     assert tagger.batches == []
+
+
+def judged_by_gate(belief: float | None) -> Corrected:
+    candidate = replace(replace_go("goes"), belief=belief)
+    pending = Pending(FlaggedSentence(SENTENCE, (GO,)), GO, (candidate,), ())
+    [corrected] = rank_corrections(
+        [pending],
+        PairedReader(WordTableTagger({"go": 0.9})),
+        tiers=TIERS,
+        policy=CorrectionPolicy(gate=AbstainGate()),
+    )
+    return corrected
+
+
+def test_the_gate_hides_what_its_writer_barely_believes() -> None:
+    corrected = judged_by_gate(-20.0)
+
+    assert corrected.ranked == ()
+    assert [r.reason for r in corrected.rejected] == [RejectionReason.UNLIKELY]
+
+
+def test_the_gate_decides_confidence() -> None:
+    assert judged_by_gate(-0.1).ranked[0].confidence is Confidence.HIGH
+    assert judged_by_gate(-1.5).ranked[0].confidence is Confidence.LOW
+
+
+def test_a_writer_giving_no_belief_is_not_gated() -> None:
+    assert judged_by_gate(None).ranked[0].confidence is Confidence.HIGH
+
+
+def test_the_policy_can_keep_the_writers_order_and_limits_what_is_offered() -> None:
+    pending = Pending(
+        FlaggedSentence(SENTENCE, (GO,)),
+        GO,
+        (replace_go("gone"), replace_go("goes"), replace_go("went")),
+        (),
+    )
+    [corrected] = rank_corrections(
+        [pending],
+        PairedReader(WordTableTagger({"go": 0.9, "gone": 0.4})),
+        tiers=TIERS,
+        policy=CorrectionPolicy(count=2, order=CandidateOrder.AS_WRITTEN),
+    )
+
+    assert [r.candidate.replacement for r in corrected.ranked] == ["gone", "goes"]

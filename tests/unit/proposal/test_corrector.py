@@ -9,7 +9,7 @@ from langcheck.correction.models import (
     Pending,
 )
 from langcheck.correction.pipeline import CorrectionPipeline
-from langcheck.proposal.corrector import ProposerCorrector, word_span
+from langcheck.proposal.corrector import ProposerCorrector, proposer_policy, word_span
 from langcheck.proposal.protocols import Proposal, ProposalRequest
 from langcheck.proposal.targets import WordSpan
 from langcheck.tagging.alignment import CharSpan
@@ -127,3 +127,22 @@ def test_a_word_becoming_punctuation_leaves_no_space_before_it() -> None:
 
     assert isinstance(pending, Pending)
     assert pending.candidates[0].span == CharSpan(12, 15)
+
+
+def test_candidates_carry_the_belief_of_their_proposal() -> None:
+    source = Source(Proposal("goes", -1.5))
+
+    [[pending]] = asyncio.run(
+        ProposerCorrector(source, Reader(), POLICY).correct([flagged(13, 15)])
+    )
+
+    assert isinstance(pending, Pending)
+    assert pending.candidates[0].belief == -1.5
+
+
+def test_a_proposer_policy_keeps_its_order_and_gates() -> None:
+    policy = proposer_policy(CorrectionPolicy(count=3))
+
+    assert policy.count == 3
+    assert policy.order is CandidateOrder.AS_WRITTEN
+    assert policy.gate is not None

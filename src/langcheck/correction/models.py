@@ -40,6 +40,7 @@ class RejectionReason(StrEnum):
     NEW_ERROR = "new_error"
     STILL_FLAGGED = "still_flagged"
     NO_IMPROVEMENT = "no_improvement"
+    UNLIKELY = "unlikely"
 
 
 class CandidateOrder(StrEnum):
@@ -49,6 +50,34 @@ class CandidateOrder(StrEnum):
     """By how much each lowers the score: the LLM's own order is no better."""
     AS_WRITTEN = "as-written"
     """As the corrector put them, when it has already taken the tagger into account."""
+
+
+@dataclass(frozen=True, slots=True)
+class AbstainGate:
+    """Whether a correction with a known belief is worth showing: a logistic model of "it
+    moves the text toward a reference", fitted on 1,000 ``bea19-dev`` sentences and 1,000
+    WikEd ones weighted equally. Below ``hide`` it is not offered, and below ``confident``
+    it is offered with low confidence.
+
+    The flag's own score carries most of the weight: a weak flag is usually a false
+    alarm, and a local model always has something to propose there.
+    """
+
+    belief: float = 0.441
+    reduction: float = 0.334
+    flag_score: float = 2.418
+    bias: float = -2.128
+    hide: float = -0.5
+    confident: float = 0.0
+
+    def score(self, *, belief: float, reduction: float, flag_score: float) -> float:
+        """The log odds that the correction helps."""
+        return (
+            self.belief * belief
+            + self.reduction * reduction
+            + self.flag_score * flag_score
+            + self.bias
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +95,7 @@ class CorrectionPolicy:
     confident_reduction: float = 0.6
     edit: ValidationPolicy = field(default_factory=ValidationPolicy)
     order: CandidateOrder = CandidateOrder.REDUCTION
+    gate: AbstainGate | None = None
 
     def __post_init__(self) -> None:
         if self.count < 1:
@@ -104,6 +134,8 @@ class Candidate:
     explanation: str
     position: int = 0
     """Where the LLM put it among the flag's corrections, best first."""
+    belief: float | None = None
+    """The log probability its writer gave it; ``None`` when the writer gives none."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,7 +3,6 @@
 import asyncio
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import replace
 from pathlib import Path
 from typing import Annotated
 
@@ -16,7 +15,6 @@ from langcheck.correction.checker import ProposerLoader
 from langcheck.correction.llm_corrector import LlmCorrector
 from langcheck.correction.measure import measure, render_measurement, suggest_all
 from langcheck.correction.models import (
-    CandidateOrder,
     Corrected,
     CorrectionPolicy,
     FlagOutcome,
@@ -31,7 +29,7 @@ from langcheck.evaluation.examples import Example, load_corrected_pairs, load_ex
 from langcheck.evaluation.protocols import EditAnnotator
 from langcheck.llm.async_openai_chat import AsyncOpenAIChatClient
 from langcheck.llm.models import ChatOptions
-from langcheck.proposal.corrector import ProposerCorrector
+from langcheck.proposal.corrector import ProposerCorrector, proposer_policy
 from langcheck.proposal.loaded import Proposing, load_proposing
 from langcheck.settings.loading import ClientSettings
 from langcheck.tagging.tiers import TierPolicy
@@ -107,7 +105,7 @@ def suggest_app(
         async with httpx.AsyncClient(transport=env.transport) as http:
             match trained:
                 case Proposing(trained=tagger, source=source):
-                    chosen = replace(policy, order=CandidateOrder.AS_WRITTEN)
+                    chosen = proposer_policy(policy)
                     corrector: Corrector = ProposerCorrector(source, tagger.reader, chosen)
                     policy = chosen
                 case Trained() as tagger:

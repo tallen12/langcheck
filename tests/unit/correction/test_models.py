@@ -1,6 +1,7 @@
 import pytest
 
 from langcheck.correction.models import (
+    AbstainGate,
     Candidate,
     Confidence,
     CorrectionPolicy,
@@ -55,3 +56,9 @@ def test_confidence_is_high_from_the_confident_reduction_up() -> None:
 
     assert policy.confidence(0.6) is Confidence.HIGH
     assert policy.confidence(0.59) is Confidence.LOW
+
+
+def test_the_gate_adds_up_its_signals() -> None:
+    gate = AbstainGate(belief=1.0, reduction=2.0, flag_score=3.0, bias=-1.0)
+
+    assert gate.score(belief=-1.0, reduction=0.5, flag_score=1.0) == 2.0

@@ -9,7 +9,6 @@ reported: a suggestion needs an option.
 
 import asyncio
 from collections.abc import Callable, Collection, Iterable, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Protocol
 
@@ -24,7 +23,6 @@ from langcheck.context.models import DocumentContext
 from langcheck.correction.llm_corrector import LlmCorrector
 from langcheck.correction.models import (
     Candidate,
-    CandidateOrder,
     Corrected,
     CorrectionPolicy,
     FlagOutcome,
@@ -35,7 +33,7 @@ from langcheck.correction.prompt import PROMPT_VERSION
 from langcheck.correction.protocols import Corrector
 from langcheck.llm.models import ChatOptions
 from langcheck.llm.protocols import AsyncLLMClient
-from langcheck.proposal.corrector import ProposerCorrector
+from langcheck.proposal.corrector import ProposerCorrector, proposer_policy
 from langcheck.proposal.loaded import Proposing
 from langcheck.tagging.alignment import CharSpan
 from langcheck.tagging.document import SentenceInText, read_sentences
@@ -223,7 +221,7 @@ async def open_proposing_checker(
 ) -> CorrectionChecker:
     """The checker using a tagger and proposer with no LLM, loaded off the event loop."""
     proposing = await asyncio.to_thread(load, checkpoint, proposer, device=config.device)
-    policy = replace(config.policy(), order=CandidateOrder.AS_WRITTEN)
+    policy = proposer_policy(config.policy())
     corrector = ProposerCorrector(proposing.source, proposing.trained.reader, policy)
     name = _name(f"tagger:{checkpoint.name}:proposer:{proposer.name}", policy)
     return _checker(corrector, proposing.trained, policy, name=name, model=proposer.name)

@@ -8,6 +8,7 @@ slots, because one error often lights up several neighbouring slots.
 
 from collections.abc import Iterable, Sequence
 
+from langcheck.check.suggestion import Confidence
 from langcheck.correction.models import (
     Candidate,
     CandidateOrder,
@@ -71,9 +72,17 @@ def _judge(
         reason = RejectionReason.STILL_FLAGGED
     elif reduction < policy.min_reduction:
         reason = RejectionReason.NO_IMPROVEMENT
+    confidence = policy.confidence(reduction)
+    if reason is None and policy.gate is not None and candidate.belief is not None:
+        odds = policy.gate.score(
+            belief=candidate.belief, reduction=reduction, flag_score=pending.flag.score
+        )
+        if odds < policy.gate.hide:
+            reason = RejectionReason.UNLIKELY
+        confidence = Confidence.HIGH if odds >= policy.gate.confident else Confidence.LOW
     if reason is not None:
         return Rejected(candidate.original, candidate.replacement, reason, reduction, candidate)
-    return Ranked(candidate, score_before, score_after, policy.confidence(reduction))
+    return Ranked(candidate, score_before, score_after, confidence)
 
 
 def rank_corrections(

@@ -686,10 +686,11 @@ second feature that lands after it.
   the original sentence. If the LLM often needs several linked edits (agreement across a
   clause), allow an issue to carry a multi-span edit.
 - **Local proposer instead of the LLM.** `correction.proposer` swaps the LLM for a 39 MB
-  decoder on the frozen tagger (`langcheck proposer train`). On the LLM's 500 `bea19-dev`
-  sentences F0.5 rose from 0.359 to 0.395 and gain from 188 to 266, but on 500 WikEd
-  sentences F0.5 fell from 0.338 to 0.190 and gain from -116 to -286: it trained on learner
-  text and does not abstain on false alarms. On CPU it took 2.1 s at p50 and 5.5 s at p90
-  per flagged sentence. Make it abstain before it becomes the default.
+  decoder on the frozen tagger (`langcheck proposer train`), with `AbstainGate` hiding
+  corrections unlikely to help. On the LLM's 500 `bea19-dev` sentences F0.5 is 0.460 against
+  0.359 and gain +338 against +188. On 500 WikEd sentences F0.5 is 0.286 against 0.338, and
+  gain -52 against -116: it hurts less but finds less. The gate was fitted on other
+  sentences of both sets. On CPU it took 2.1 s at p50 and 5.5 s at p90 per flagged sentence,
+  before the gate.
 - **Scaling past one process.** Redis or SQL adapters for `DocumentStore` and
   `ResultCache`, and a separate scorer service, when one process is not enough.
