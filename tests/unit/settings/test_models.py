@@ -3,7 +3,7 @@ from pydantic import SecretStr, ValidationError
 
 from langcheck.llm.models import ClientConfig
 from langcheck.scoring.factory import ScorerAdapter, ScorerConfig
-from langcheck.scoring.policy import KindPolicy, ScoringPolicy
+from langcheck.scoring.policy import PLL_DEFAULT, KindPolicy, ScoringPolicy
 from langcheck.settings.models import HttpSettings, LLMSettings, ScorerSettings
 from langcheck.taxonomy.kinds import ErrorKind
 
@@ -50,3 +50,13 @@ def test_scorer_settings_convert_adapters_and_policy() -> None:
     )
     with pytest.raises(ValidationError):
         ScorerSettings.model_validate({"adapters": ["bert"]})
+
+
+def test_pll_alone_defaults_to_the_evaluated_policy() -> None:
+    def policy(settings: dict[str, object]) -> ScoringPolicy:
+        return ScorerSettings.model_validate(settings).scorer_config().policy
+
+    assert policy({"adapters": ["pll"]}) == PLL_DEFAULT
+    assert policy({"adapters": ["pll", "cola"]}) == ScoringPolicy()
+    assert policy({"adapters": ["cola"]}) == ScoringPolicy()
+    assert policy({"adapters": ["pll"], "policy": {}}) == ScoringPolicy()

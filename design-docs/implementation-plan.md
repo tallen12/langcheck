@@ -200,9 +200,12 @@ Two adapters, usable alone or combined:
 Ranking always applies: `delta = score(candidate) - score(original)`, options sorted by
 delta. Filtering is per error kind: a `ScoringPolicy` maps each `ErrorKind` to
 `filter: bool` and a `margin`, and drops an issue only when filtering is on for its kind
-and no option beats the original by the margin. Every kind starts with filtering off.
-M6 turns it on for the kinds where it raises precision without losing much recall; PLL
-is expected to help least on Punctuation, Capitalization and SentenceBoundary.
+and no option beats the original by the margin. M6 turns filtering on for the kinds
+where it raises precision without losing much recall. With PLL alone and no
+`scorer.policy` configured, the default filters Spelling (margin -0.382),
+WordBoundary (0.3305) and WordOrder (-0.232), as tuned on closeness in M6; other
+scorers filter nothing by default,
+because the margins are PLL deltas, and `scorer.policy: {}` turns filtering off.
 
 The scorer is CPU or GPU bound. The service runs it in one worker thread behind a small
 batching queue, so it never blocks the event loop. PyTorch builds (cpu, cuda, rocm) are
@@ -574,9 +577,78 @@ latency), applies each suggestion's best option, extracts the edits with ERRANT
 contcheck's ERRANT map. Its JSON report in `runs/` also holds rejections by reason and
 every suggestion's kind, best delta and correctness; `evaluate tune` uses those to pick a
 margin per kind and prints `scorer.policy` YAML, and `evaluate compare` sets two runs
-side by side. Correctness for tuning is per suggestion (all its edits are gold edits),
-an approximation of ERRANT's per-edit counts. The comparison with contcheck's tagger
+side by side. Tuning groups suggestions by the kind the LLM gave them (what the policy
+acts on; ERRANT may type the same edit differently) and judges a kind's filter by its
+effect on overall F0.5: a correct suggestion (all its edits are gold edits) dropped
+becomes a false negative, a wrong one dropped removes a false positive, and one with no
+effect (no edit ERRANT counts, such as spacing in tokenized input) is ignored. A kind
+needs 20 scored suggestions before it is tuned (`--min-suggestions`); on 200 CoNLL-2014
+sentences, smaller kinds "gained" up to 0.3 F0.5 from noise. The comparison with contcheck's tagger
 needs contcheck's own run on the same sets and is not part of this command.
+
+The sets store sentences as space-separated tokens ("The law 's spirit ."). Checked
+that way, the LLM missed errors it caught with normal spacing and suggested spacing
+fixes, so `evaluate run` checks each sentence with normal spacing and ERRANT
+re-tokenizes the correction to score it against the set's tokens. Where spaCy would
+not split the normally spaced sentence back into exactly the set's tokens ("he / she",
+"haven't" kept whole), the sentence is checked as tokens instead, so tokenization
+differences never count as edits; the report counts these (about 10% of CoNLL-2014,
+1% of BEA-2019 dev). Runs before this change checked every sentence as tokens.
+
+Reports also give top-n scores for n = 1 to 4: each suggestion takes whichever of its
+first n options scores best against the gold edits. Top-1 is the normal score; the rise
+from top-1 to top-4 bounds what better option ranking could gain, since the right fix
+was among the LLM's options but not ranked first.
+
+Reports also measure closeness: the word-level edit distance from each sentence to
+its closest reference (the source with one annotator's gold edits applied), before
+and after the checker's changes. The gain is how many word edits the changes saved,
+negative when they moved the sentence further away. Exact matching gives no credit to
+a fix split differently from the gold edit or one that gets most of the way, and
+counts a ten-word bad rewrite as about one false positive; closeness counts every
+word. Reports give the overall gain as a share of the edits needed and the gain per
+kind the LLM gave, and `evaluate tune --objective closeness` judges filters by it.
+
+Results (qwen3:8b through Ollama with reasoning off, prompt check-v1, PLL with
+distilroberta-base):
+
+- Tuning on 1,000 BEA-2019 dev sentences (overall F0.5 0.239 unfiltered) turned on
+  filtering for WordBoundary (margin -0.072: drops 65 wrong suggestions and 2 correct)
+  and Punctuation (margin -0.274: drops 53 wrong and 0 correct). Each raised overall
+  F0.5 by about 0.008. Every other kind gained nothing or had fewer than 20 suggestions.
+- On 200 held-out CoNLL-2014 test sentences, without filtering, F0.5 was 0.267 without
+  a scorer and 0.292 and 0.251 in two PLL runs. The 0.04 gap between those two runs is
+  run-to-run LLM variation, so single runs compare loosely. With the BEA-tuned policy,
+  a live run scored 0.310 (P 0.363, R 0.197, 27 suggestions filtered). Applied offline to
+  the same LLM output as the 0.251 run, the policy dropped 28 wrong suggestions and no
+  correct ones, for 0.273. These runs checked sentences as tokens; the policy was
+  retuned after the switch to normal spacing (below).
+- With normal spacing (LLM alone, 200 CoNLL-2014 sentences), F0.5 rose from 0.270 to
+  0.284, mostly from fewer wrong Punctuation suggestions. On 1,000 BEA-2019 dev sentences
+  with PLL and no filtering it was 0.256 (was 0.239), and the LLM made 18 Punctuation
+  suggestions instead of 126: most had fixed the tokenized spacing. Retuning there left
+  only WordBoundary worth filtering, at margin 0.304 (drops 59 wrong suggestions and 3
+  correct, 0.256 -> 0.264); Punctuation now has too few suggestions to tune. On 200
+  held-out CoNLL-2014 sentences the same margin drops 16 wrong and 1 correct
+  (0.301 -> 0.313), and tuning CoNLL on its own picks 0.297. The previous two filters
+  gained no more on either set and on CoNLL dropped a correct Punctuation suggestion.
+  WordBoundary alone was then the PLL default.
+- Closeness showed what F0.5 hid. Without filters the checker moved sentences away
+  from the references overall (BEA-2019 -124 of 3,501 needed word edits, CoNLL-2014
+  -18 of 654), and suggestions the LLM labelled WordOrder did most of it (-208 and -51
+  words). The LLM's labels mostly disagree with the edits it makes (37% agree; 4% for
+  WordBoundary, 5% for WordOrder), and those two labels mark rewrites it could not
+  classify, which are rarely right. Tuning on closeness with the 10% recall limit
+  filters Spelling (-0.382), WordBoundary (0.3305) and WordOrder (-0.232). On held-out
+  CoNLL-2014 they drop 30 wrong suggestions and 3 correct: F0.5 0.274 -> 0.291 and
+  closeness -2.8% -> +2.4%, against 0.288 and -0.5% for WordBoundary alone. These
+  three filters are the PLL default (see Scoring options). Dropping every WordOrder
+  suggestion did better on CoNLL (0.296, +7.3%) but loses more correct suggestions
+  (16 on BEA-2019) and was not chosen.
+- Latency per chunk was p50 1.8 s and p90 3.3 s without a scorer, and p50 2.2–2.7 s and
+  p90 5.4 s with PLL on CPU.
+- Validation rejected 63 of the LLM's issues on CoNLL-2014 (200 sentences) and 357 on
+  BEA-2019 (1,000 sentences), mostly as too large or as no change.
 
 ## Features
 
@@ -604,13 +676,17 @@ second feature that lands after it.
 ## Open questions
 
 - **Default LLM model.** Any OpenAI-compatible server works; which model to recommend is
-  decided by M6 on accuracy and latency (live editing needs about 1–3 s per chunk).
+  decided by M6 on accuracy and latency (live editing needs about 1–3 s per chunk). Only
+  qwen3:8b has been evaluated so far: F0.5 0.24–0.31 at p50 1.8 s per chunk.
 - **Sentence splitter.** M1 uses a dependency-free regex splitter behind the
   `SentenceSplitter` protocol: it keeps exact offsets and handles abbreviations,
   initials and dialogue tags. Swap in `pysbd` or spaCy if M6 finds its boundaries hurt
   accuracy.
 - **Does PLL scoring pay for its latency?** M6 measures it per kind. If the CoLA
-  classifier alone does as well, drop PLL.
+  classifier alone does as well, drop PLL. So far PLL pays only through filtering
+  (Spelling, WordBoundary and WordOrder: about +0.02 F0.5 and +5% of needed edits on
+  held-out data), at about 1 s more
+  per chunk at p50 and 2 s at p90 on CPU. CoLA has not been evaluated.
 - **Whole-sentence options vs span options.** The plan scores span replacements inside
   the original sentence. If the LLM often needs several linked edits (agreement across a
   clause), allow an issue to carry a multi-span edit.

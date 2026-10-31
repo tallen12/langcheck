@@ -69,6 +69,10 @@ class ErrantEditAnnotator:
             scored.append(ScoredEdit(edit.start, edit.end, edit.correction, kind))
         return scored
 
+    def tokenize(self, text: str) -> list[str]:
+        """spaCy's tokens for ``text``, as ERRANT parses a correction."""
+        return [token.text for token in self._annotator.parse(text, tokenise=True)]
+
     def _annotate(self, original: Doc, correction: Doc) -> list[ScoredEdit]:
         edits: list[ScoredEdit] = []
         for edit in self._annotator.annotate(original, correction):

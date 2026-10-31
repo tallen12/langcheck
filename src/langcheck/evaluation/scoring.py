@@ -100,11 +100,17 @@ def best_annotator(
     """
     # A sentence without annotators has nothing to correct.
     candidates: Sequence[Sequence[ScoredEdit]] = annotators if annotators else ((),)
-    scored = [(index, compare(system, gold)) for index, gold in enumerate(candidates)]
+    return best_score([compare(system, gold) for gold in candidates], running=running)
+
+
+def best_score(scores: Sequence[Score], *, running: Counts) -> tuple[int, Score]:
+    """The index and value of the score, one per annotator, that gives the best F0.5
+    added to ``running``, with ``best_annotator``'s tie-breaks. ``scores`` is not empty.
+    """
 
     def rank(item: tuple[int, Score]) -> tuple[float, int, int, int, int]:
         index, score = item
         total = running + score.overall
         return (total.f05, total.tp, -total.fp, -total.fn, -index)
 
-    return max(scored, key=rank)
+    return max(enumerate(scores), key=rank)

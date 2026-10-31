@@ -411,6 +411,7 @@ def test_evaluate_fetches_runs_shows_compares_and_tunes(cli: Cli, tmp_path: Path
 
 def test_evaluate_tune_prints_the_policy(cli: Cli, tmp_path: Path) -> None:
     from langcheck.evaluation.report import KindScore, Latency, Outcome, Report
+    from langcheck.evaluation.runner import Effect
     from langcheck.evaluation.scoring import Counts
     from langcheck.taxonomy.kinds import ErrorKind
 
@@ -427,7 +428,9 @@ def test_evaluate_tune_prints_the_policy(cli: Cli, tmp_path: Path) -> None:
         filtered=0,
         latency=Latency.of([1.0]),
         outcomes=[
-            Outcome(kind=ErrorKind.PUNCTUATION, delta=d, correct=c)
+            Outcome(
+                kind=ErrorKind.PUNCTUATION, delta=d, effect=Effect.CORRECT if c else Effect.WRONG
+            )
             for d, c in [(-1.0, False), (-0.5, False), (0.2, False), (1.0, True), (2.0, True)]
         ],
     )
@@ -435,6 +438,14 @@ def test_evaluate_tune_prints_the_policy(cli: Cli, tmp_path: Path) -> None:
     path.write_text(report.model_dump_json(), encoding="utf-8")
 
     assert cli("evaluate", "tune", str(path)) == CLEAN
+    assert "too few to tune" in cli.output
+    cli.out.clear()
 
-    assert "Punctuation            filter above 0.2" in cli.output
+    assert cli("evaluate", "tune", str(path), "--min-suggestions", "5") == CLEAN
+
+    assert "Punctuation            filter above 0.200" in cli.output
     assert cli.output.endswith("    Punctuation:\n      filter: true\n      margin: 0.2")
+    cli.out.clear()
+
+    assert cli("evaluate", "tune", str(path), "--objective", "closeness") == FAILED
+    assert "no closeness; rerun it" in cli.err[-1]

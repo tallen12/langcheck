@@ -7,9 +7,10 @@ from langcheck.check.reply import ReplyIssue
 from langcheck.check.resolve import Rejection, RejectionReason
 from langcheck.check.suggestion import Option, Scored, Suggestion, suggestion_id
 from langcheck.context.models import DocumentContext
+from langcheck.evaluation.closeness import Closeness
 from langcheck.evaluation.examples import Example
 from langcheck.evaluation.models import ScoredEdit
-from langcheck.evaluation.runner import EVALUATION_USER, apply_best, check_all, evaluate
+from langcheck.evaluation.runner import EVALUATION_USER, Effect, apply_best, check_all, evaluate
 from langcheck.evaluation.scoring import Counts
 from langcheck.taxonomy.kinds import ErrorKind, Operation
 from langcheck.text.models import Span
@@ -18,12 +19,18 @@ from tests.conftest import TokenDiffAnnotator
 GO = Example(
     ("He", "go", "teh", "way", "."),
     ((ScoredEdit(1, 2, ("goes",), None), ScoredEdit(2, 3, ("the",), None)),),
+    "He go teh way .",
 )
-FINE = Example(("All", "fine", "."), ((),))
+FINE = Example(("All", "fine", "."), ((),), "All fine .")
 
 
 def suggestion(
-    text: str, original: str, replacement: str, kind: ErrorKind, delta: float | None
+    text: str,
+    original: str,
+    replacement: str,
+    kind: ErrorKind,
+    delta: float | None,
+    *others: str,
 ) -> Suggestion:
     start = text.index(original)
     span = Span(start, start + len(original))
@@ -35,12 +42,14 @@ def suggestion(
         kind=kind,
         operation=Operation.REPLACEMENT,
         explanation="",
-        options=(Option(replacement, rating),),
+        options=(Option(replacement, rating), *(Option(other) for other in others)),
     )
 
 
 class ScriptedChecker:
-    """Fixes "go" and "teh" (wrongly, as "a"), flags "fine", records calls."""
+    """Fixes "go" and "teh" (wrongly, as "a"; "the" is its third option), flags "fine",
+    records calls.
+    """
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, DocumentContext]] = []
@@ -58,7 +67,7 @@ class ScriptedChecker:
             return CheckResult(
                 (
                     suggestion(text, "go", "goes", ErrorKind.SUBJECT_VERB_AGREEMENT, 2.0),
-                    suggestion(text, "teh", "a", ErrorKind.SPELLING, None),
+                    suggestion(text, "teh", "a", ErrorKind.SPELLING, None, "tea", "the"),
                 ),
                 (),
                 (
@@ -85,12 +94,24 @@ def test_evaluate_scores_sentences_and_suggestions() -> None:
     run = asyncio.run(evaluate([GO, FINE], checker, TokenDiffAnnotator(), concurrency=2))
 
     assert run.score.overall == Counts(tp=1, fp=2, fn=1)
+    assert run.top_n == (
+        Counts(tp=1, fp=2, fn=1),
+        Counts(tp=1, fp=2, fn=1),
+        Counts(tp=2, fp=1, fn=0),
+        Counts(tp=2, fp=1, fn=0),
+    )
     go, fine = run.sentences
-    assert [(o.kind, o.delta, o.correct) for o in go.outcomes] == [
-        (ErrorKind.SUBJECT_VERB_AGREEMENT, 2.0, True),
-        (ErrorKind.SPELLING, None, False),
+    assert [o.gain for o in go.outcomes] == [1, 0]
+    assert [o.gain for o in fine.outcomes] == [-1]
+    assert (go.closeness, fine.closeness) == (Closeness(2, 1), Closeness(0, -1))
+    assert run.closeness == Closeness(2, 0)
+    assert go.tokenized
+    assert go.top_n[0] == go.score.overall
+    assert [(o.kind, o.delta, o.effect) for o in go.outcomes] == [
+        (ErrorKind.SUBJECT_VERB_AGREEMENT, 2.0, Effect.CORRECT),
+        (ErrorKind.SPELLING, None, Effect.WRONG),
     ]
-    assert [(o.kind, o.correct) for o in fine.outcomes] == [(ErrorKind.REAL_WORD, False)]
+    assert [(o.kind, o.effect) for o in fine.outcomes] == [(ErrorKind.REAL_WORD, Effect.WRONG)]
     assert run.rejections == Counter({RejectionReason.UNKNOWN_KIND: 1})
     assert (go.unchecked, fine.unchecked) == (False, True)
     assert {(text, user) for text, user, _ in checker.calls} == {

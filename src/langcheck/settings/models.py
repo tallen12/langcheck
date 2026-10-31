@@ -14,7 +14,7 @@ from langcheck.context.builder import DEFAULT_MAX_PARAGRAPHS
 from langcheck.documents.sessions import DEFAULT_DEBOUNCE, DEFAULT_REFRESH_SHARE
 from langcheck.llm.models import ClientConfig
 from langcheck.scoring.factory import ScorerAdapter, ScorerConfig
-from langcheck.scoring.policy import KindPolicy, ScoringPolicy
+from langcheck.scoring.policy import PLL_DEFAULT, KindPolicy, ScoringPolicy
 from langcheck.scoring.threaded import DEFAULT_MAX_BATCH
 from langcheck.taxonomy.kinds import ErrorKind
 
@@ -122,6 +122,9 @@ class ScorerSettings(BaseModel):
     """Which sentence scorers rank options. No adapters (the default) means options keep
     the LLM's order and PyTorch is not needed; ``pll`` and ``cola`` need a PyTorch build
     (``just setup cpu``) and download their models on first use.
+
+    Without a ``policy``, PLL alone uses the evaluated ``PLL_DEFAULT`` filters and other
+    scorers filter nothing; ``policy: {}`` turns filtering off.
     """
 
     model_config = _SECTION
@@ -132,21 +135,29 @@ class ScorerSettings(BaseModel):
     cola_model: str = "textattack/roberta-base-CoLA"
     window: Annotated[int, Field(ge=0)] = 3
     max_batch: Annotated[int, Field(ge=1)] = DEFAULT_MAX_BATCH
-    policy: dict[ErrorKind, KindPolicySettings] = Field(default_factory=dict)
+    policy: dict[ErrorKind, KindPolicySettings] | None = None
 
     def scorer_config(self) -> ScorerConfig:
         """The scoring domain's configuration."""
+        adapters = tuple(dict.fromkeys(self.adapters))
         return ScorerConfig(
-            adapters=tuple(dict.fromkeys(self.adapters)),
+            adapters=adapters,
             device=self.device,
             pll_model=self.pll_model,
             cola_model=self.cola_model,
             window=self.window,
             max_batch=self.max_batch,
-            policy=ScoringPolicy(
-                {kind: KindPolicy(rule.filter, rule.margin) for kind, rule in self.policy.items()}
-            ),
+            policy=self._scoring_policy(adapters),
         )
+
+    def _scoring_policy(self, adapters: tuple[ScorerAdapter, ...]) -> ScoringPolicy:
+        if self.policy is not None:
+            return ScoringPolicy(
+                {kind: KindPolicy(rule.filter, rule.margin) for kind, rule in self.policy.items()}
+            )
+        if adapters == (ScorerAdapter.PLL,):
+            return PLL_DEFAULT
+        return ScoringPolicy()
 
 
 class LimitsSettings(BaseModel):

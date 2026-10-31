@@ -28,6 +28,7 @@ from langcheck.cli.checking import ContextUnavailableError, open_local, open_rem
 from langcheck.cli.environment import CliEnvironment, process_environment
 from langcheck.cli.evaluating import evaluate_app
 from langcheck.cli.render import render_check, render_context
+from langcheck.cli.tagging import TaggerTrainingError, TransformerRuntime, tagger_app
 from langcheck.cli.watching import watch_file
 from langcheck.database.schema import open_database
 from langcheck.evaluation.datasets import DatasetError
@@ -71,6 +72,7 @@ _EXPECTED_FAILURES = (
     ScorerUnavailableError,
     DatasetError,
     M2Error,
+    TaggerTrainingError,
     httpx.HTTPError,
     OSError,
 )
@@ -124,6 +126,7 @@ def build_app(env: CliEnvironment) -> App:
             return FAILED
 
     app.command(evaluate_app(env, settings=client_settings, guarded=guarded))
+    app.command(tagger_app(env, runtime=TransformerRuntime(), guarded=guarded))
 
     @app.command
     def check(

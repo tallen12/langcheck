@@ -253,6 +253,10 @@ class TokenDiffAnnotator:
         """The M2 edits with this fake's kind."""
         return [ScoredEdit(e.start, e.end, e.correction, self.kind) for e in edits]
 
+    def tokenize(self, text: str) -> list[str]:
+        """Whitespace tokens, as ``system_edits`` splits a correction."""
+        return text.split()
+
     def _diff(self, source: Sequence[str], target: Sequence[str]) -> list[ScoredEdit]:
         matcher = difflib.SequenceMatcher(a=list(source), b=list(target), autojunk=False)
         edits: list[ScoredEdit] = []

@@ -6,7 +6,8 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from langcheck.evaluation.runner import RunResult
+from langcheck.evaluation.closeness import Closeness
+from langcheck.evaluation.runner import Effect, RunResult
 from langcheck.evaluation.scoring import Counts
 from langcheck.taxonomy.kinds import ErrorKind
 
@@ -71,13 +72,33 @@ class Latency(BaseModel):
 
 
 class Outcome(BaseModel):
-    """One suggestion, for tuning the scoring policy from a saved report."""
+    """One suggestion, for tuning the scoring policy from a saved report. ``gain`` is
+    ``None`` in reports made before closeness was kept.
+    """
 
     model_config = _REPORT
 
     kind: ErrorKind
     delta: float | None
-    correct: bool
+    effect: Effect
+    gain: int | None = None
+
+
+class ClosenessScore(BaseModel):
+    """Word edits the sentences needed to reach their closest references, and how many
+    the checker's changes saved (negative: it moved them further away).
+    """
+
+    model_config = _REPORT
+
+    needed: int
+    gain: int
+    share: float
+
+    @classmethod
+    def of(cls, closeness: Closeness) -> ClosenessScore:
+        """The score for ``closeness``."""
+        return cls(needed=closeness.needed, gain=closeness.gain, share=round(closeness.share, 4))
 
 
 class Report(BaseModel):
@@ -95,8 +116,19 @@ class Report(BaseModel):
     rejections: dict[str, int]
     unchecked: int
     filtered: int
+    tokenized: int = 0
+    """Sentences checked as space-joined tokens, because normal spacing would not
+    tokenize back to the set's tokens. Reports made before this field checked every
+    sentence that way but show 0.
+    """
     latency: Latency
     outcomes: Annotated[list[Outcome], Field(default_factory=list)]
+    closeness: ClosenessScore | None = None
+    """``None`` in reports made before closeness was kept."""
+    top_n: Annotated[list[KindScore], Field(default_factory=list)]
+    """Overall scores when each suggestion takes the best of its first n options, as
+    rows named ``top-1`` to ``top-4``. Empty in reports made before they were kept.
+    """
 
     def kind_counts(self) -> dict[str, Counts]:
         """Counts per kind name, including ``other``."""
@@ -123,12 +155,15 @@ def build_report(
         rejections={reason.value: count for reason, count in sorted(run.rejections.items())},
         unchecked=sum(s.unchecked for s in run.sentences),
         filtered=sum(s.filtered for s in run.sentences),
+        tokenized=sum(s.tokenized for s in run.sentences),
         latency=Latency.of([s.seconds for s in run.sentences]),
         outcomes=[
-            Outcome(kind=o.kind, delta=o.delta, correct=o.correct)
+            Outcome(kind=o.kind, delta=o.delta, effect=o.effect, gain=o.gain)
             for s in run.sentences
             for o in s.outcomes
         ],
+        closeness=ClosenessScore.of(run.closeness),
+        top_n=[KindScore.of(f"top-{n}", counts) for n, counts in enumerate(run.top_n, start=1)],
     )
 
 
@@ -136,6 +171,10 @@ def render_report(report: Report) -> str:
     """A plain-text table: one row per kind, then rejections and latency."""
     header = f"{'kind':<22} {'TP':>5} {'FP':>5} {'FN':>5} {'P':>6} {'R':>6} {'F0.5':>6}"
     rows = [_row(row) for row in [*report.kinds, report.overall]]
+    if report.top_n:
+        rows += ["best of the first n options:", *(_row(row) for row in report.top_n)]
+    if report.closeness is not None:
+        rows += _closeness_rows(report)
     rejected = ", ".join(f"{reason} {count}" for reason, count in report.rejections.items())
     latency = report.latency
     return "\n".join(
@@ -145,7 +184,7 @@ def render_report(report: Report) -> str:
             header,
             *rows,
             f"rejected: {rejected or 'none'}; unchecked: {report.unchecked}; "
-            f"filtered: {report.filtered}",
+            f"filtered: {report.filtered}; checked as tokens: {report.tokenized}",
             f"seconds per chunk: mean {latency.mean}, p50 {latency.p50}, p90 {latency.p90}, "
             f"max {latency.max}",
         ]
@@ -174,6 +213,26 @@ def _row(row: KindScore) -> str:
         f"{row.kind:<22} {row.tp:>5} {row.fp:>5} {row.fn:>5} "
         f"{row.precision:6.3f} {row.recall:6.3f} {row.f05:6.3f}"
     )
+
+
+def _closeness_rows(report: Report) -> list[str]:
+    closeness = report.closeness
+    if closeness is None:
+        return []
+    by_kind: dict[ErrorKind, tuple[int, int]] = {}
+    for outcome in report.outcomes:
+        if outcome.gain is not None:
+            count, gain = by_kind.get(outcome.kind, (0, 0))
+            by_kind[outcome.kind] = (count + 1, gain + outcome.gain)
+    return [
+        f"closeness: {closeness.gain:+d} of {closeness.needed} word edits needed "
+        f"({closeness.share:+.1%})",
+        f"{'by suggested kind':<22} {'n':>5} {'gain':>6}",
+        *(
+            f"{kind.value:<22} {count:>5} {gain:>+6d}"
+            for kind, (count, gain) in sorted(by_kind.items(), key=lambda item: item[1][1])
+        ),
+    ]
 
 
 def _label(report: Report) -> str:

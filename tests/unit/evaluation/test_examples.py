@@ -1,9 +1,12 @@
+import re
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
 from langcheck.evaluation.datasets import Dataset, DatasetError
-from langcheck.evaluation.examples import Example, load_examples
+from langcheck.evaluation.examples import Example, checked_text, load_examples
+from langcheck.evaluation.m2 import GoldEdit
 from langcheck.evaluation.models import ScoredEdit
 from tests.conftest import TokenDiffAnnotator
 
@@ -23,10 +26,46 @@ def test_loads_m2_sentences_with_their_annotators(tmp_path: Path) -> None:
     examples = load_examples(Dataset.CONLL14_TEST, [path], TokenDiffAnnotator(), limit=2)
 
     assert examples == [
-        Example(("He", "go", "home", "."), ((ScoredEdit(1, 2, ("goes",), None),),)),
-        Example(("Fine", "."), ((),)),
+        Example(("He", "go", "home", "."), ((ScoredEdit(1, 2, ("goes",), None),),), "He go home ."),
+        Example(("Fine", "."), ((),), "Fine ."),
     ]
-    assert examples[0].text == "He go home ."
+    assert examples[0].tokenized
+
+
+class PunctuationTokens:
+    """``TokenDiffAnnotator``, but splitting punctuation off words as spaCy does."""
+
+    def __init__(self) -> None:
+        self._diff = TokenDiffAnnotator()
+
+    def system_edits(self, source: Sequence[str], corrected: str) -> list[ScoredEdit]:
+        return self._diff.reference_edits(source, self.tokenize(corrected))
+
+    def reference_edits(self, source: Sequence[str], reference: Sequence[str]) -> list[ScoredEdit]:
+        return self._diff.reference_edits(source, reference)
+
+    def gold_edits(self, source: Sequence[str], edits: Sequence[GoldEdit]) -> list[ScoredEdit]:
+        return self._diff.gold_edits(source, edits)
+
+    def tokenize(self, text: str) -> list[str]:
+        return [match.group() for match in re.finditer(r"\w+|[^\w\s]", text)]
+
+
+def test_examples_get_normal_spacing_when_it_tokenizes_back(tmp_path: Path) -> None:
+    path = tmp_path / "set.m2"
+    path.write_text(M2, encoding="utf-8")
+
+    [example, *_] = load_examples(Dataset.CONLL14_TEST, [path], PunctuationTokens())
+
+    assert example.text == "He go home."
+    assert not example.tokenized
+
+
+def test_checked_text_keeps_tokens_the_annotator_would_split_differently() -> None:
+    assert checked_text(("A", "well-known", "fact", "."), PunctuationTokens()) == (
+        "A well-known fact ."
+    )
+    assert checked_text(("A", "fact", "."), PunctuationTokens()) == "A fact."
 
 
 def test_reference_sets_get_one_annotator_per_reference(tmp_path: Path) -> None:

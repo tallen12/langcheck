@@ -94,3 +94,9 @@ def test_http_downloader_streams_to_the_destination(tmp_path: Path) -> None:
     with pytest.raises(httpx.HTTPStatusError):
         downloader.download("https://data.test/missing", tmp_path / "missing")
     assert not (tmp_path / "missing").exists()
+
+
+def test_the_training_sets_read_one_m2_file_each() -> None:
+    for dataset in (Dataset.BEA19_TRAIN, Dataset.FCE_TRAIN):
+        assert SOURCES[dataset].format is Format.M2
+        assert len(SOURCES[dataset].members) == 1
