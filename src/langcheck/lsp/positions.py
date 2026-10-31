@@ -60,6 +60,17 @@ class LineIndex:
         column = sum(2 if ord(c) > 0xFFFF else 1 for c in self._text[start:offset])
         return Position(line, column)
 
+    def offset(self, position: Position) -> int:
+        """The code point at ``position``, the inverse of :meth:`position`."""
+        if position.line >= len(self._starts):
+            return len(self._text)
+        offset = self._starts[position.line]
+        column = 0
+        while column < position.character and offset < len(self._text):
+            column += 2 if ord(self._text[offset]) > 0xFFFF else 1
+            offset += 1
+        return offset
+
     def range(self, start: int, end: int) -> Range:
         """The range of code points ``[start, end)``."""
         return Range(self.position(start), self.position(end))

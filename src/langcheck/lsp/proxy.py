@@ -3,13 +3,14 @@
 The editor sends full text on every change. Only one update per document is in flight;
 changes made meanwhile collapse into the latest text. The service answers each update
 with its version, and its event stream sends snapshots per version; a snapshot becomes
-diagnostics only when it belongs to the version whose text the proxy sent last, so
-offsets always refer to the text the editor has.
+diagnostics only when it belongs to the version whose text the proxy sent last. Between
+snapshots, each edit moves the diagnostics it does not touch, so their quick fixes keep
+working and always refer to the text the editor has.
 """
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from langcheck.api.client import ServiceError
 from langcheck.api.schemas import DocumentBody
@@ -42,8 +43,7 @@ class _Open:
     texts: dict[int, str] = field(default_factory=dict)
     snapshot: DocumentBody | None = None
     diagnostics: list[Diagnostic] = field(default_factory=list)
-    # The text ``diagnostics`` were placed on; their ranges hold only while the editor
-    # still has exactly this text.
+    # The text ``diagnostics`` are placed on: the editor's text once they are showing.
     shown: str | None = None
     watcher: asyncio.Task[None] | None = None
 
@@ -79,6 +79,10 @@ class LspProxy:
             await self.opened(uri, text)
             return
         document.text = text
+        if document.shown is not None:
+            document.diagnostics = moved_diagnostics(document.shown, text, document.diagnostics)
+            document.shown = text
+            await self._publish(uri, document.diagnostics)
         self._queue(uri, text)
 
     async def closed(self, uri: str) -> None:
@@ -97,12 +101,10 @@ class LspProxy:
 
     def code_actions(self, uri: str, selection: Range) -> list[CodeAction]:
         """Quick fixes for the diagnostics that overlap ``selection``, options in ranked
-        order, then "Add to dictionary" and "Dismiss". None while the editor's text has
-        moved on from the text the diagnostics were placed on: their edits would replace
-        the wrong characters.
+        order, then "Add to dictionary" and "Dismiss".
         """
         document = self._open.get(uri)
-        if document is None or document.shown != document.text:
+        if document is None:
             return []
         actions: list[CodeAction] = []
         for diagnostic in document.diagnostics:
@@ -203,8 +205,11 @@ class LspProxy:
         text = document.texts.get(snapshot.version)
         if text is None:
             return
-        document.diagnostics = diagnostics_for(text, snapshot)
-        document.shown = text
+        # The editor may have moved on from the text this snapshot describes.
+        document.diagnostics = moved_diagnostics(
+            text, document.text, diagnostics_for(text, snapshot)
+        )
+        document.shown = document.text
         await self._publish(uri, document.diagnostics)
 
 
@@ -223,6 +228,30 @@ def diagnostics_for(text: str, snapshot: DocumentBody) -> list[Diagnostic]:
         )
         for s in snapshot.suggestions
     ]
+
+
+def moved_diagnostics(before: str, after: str, diagnostics: list[Diagnostic]) -> list[Diagnostic]:
+    """``diagnostics`` on ``before``, placed on ``after``. Those touching the changed text
+    are dropped: it no longer reads as they say. All changes count as one span from the
+    first to the last, which is exact for a single edit.
+    """
+    if before == after:
+        return diagnostics
+    limit = min(len(before), len(after))
+    start = next((i for i in range(limit) if before[i] != after[i]), limit)
+    tail = next((i for i in range(limit - start) if before[-1 - i] != after[-1 - i]), limit - start)
+    end = len(before) - tail
+    shift = len(after) - len(before)
+    old, new = LineIndex(before), LineIndex(after)
+    kept: list[Diagnostic] = []
+    for diagnostic in diagnostics:
+        first = old.offset(diagnostic.range.start)
+        last = old.offset(diagnostic.range.end)
+        if last < start:
+            kept.append(replace(diagnostic, range=new.range(first, last)))
+        elif first > end:
+            kept.append(replace(diagnostic, range=new.range(first + shift, last + shift)))
+    return kept
 
 
 def _message(original: str, options: list[str], explanation: str) -> str:
