@@ -12,3 +12,5 @@ llm:
 # correction:
 #   checkpoint: runs/tagger-context2
 #   device: cpu
+#   # Also uncomment to correct flags with a local model instead of the LLM.
+#   proposer: runs/proposer-context2

@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import Callable, Sequence
 
+from langcheck.correction.llm_corrector import LlmCorrector
 from langcheck.correction.models import (
     Corrected,
     CorrectionPolicy,
@@ -42,11 +43,10 @@ def suggest(
 ) -> tuple[list[FlagOutcome], ScriptedLLM]:
     llm = build(script)
     pipeline = CorrectionPipeline(
-        llm=llm,
+        corrector=LlmCorrector(llm, CorrectionPolicy(count=3), ChatOptions()),
         reader=PairedReader(WordTableTagger(table)),
         tiers=TierPolicy(),
         policy=CorrectionPolicy(count=3),
-        options=ChatOptions(),
         context_sentences=1,
     )
     return asyncio.run(pipeline.suggest(text)), llm

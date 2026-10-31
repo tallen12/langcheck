@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import Callable, Sequence
 
+from langcheck.correction.llm_corrector import LlmCorrector
 from langcheck.correction.measure import (
     OFFERED,
     CorrectionReport,
@@ -141,11 +142,12 @@ def test_suggest_all_keeps_order_and_logs_progress(
     scripted_llm: Callable[[Sequence[str | LLMError | Responder]], ScriptedLLM],
 ) -> None:
     pipeline = CorrectionPipeline(
-        llm=scripted_llm([json.dumps({"flags": []})]),
+        corrector=LlmCorrector(
+            scripted_llm([json.dumps({"flags": []})]), CorrectionPolicy(), ChatOptions()
+        ),
         reader=PairedReader(WordTableTagger({"go": 0.9})),
         tiers=TierPolicy(),
         policy=CorrectionPolicy(),
-        options=ChatOptions(),
         context_sentences=0,
     )
     logged: list[str] = []

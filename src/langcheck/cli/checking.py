@@ -19,10 +19,16 @@ from langcheck.check.resolve import ValidationPolicy
 from langcheck.context.builder import ContextBuilder, NoContext
 from langcheck.context.models import DocumentContext
 from langcheck.context.protocols import ContextSource
-from langcheck.correction.checker import TaggerLoader, open_correction_checker
+from langcheck.correction.checker import (
+    ProposerLoader,
+    TaggerLoader,
+    open_correction_checker,
+    open_proposing_checker,
+)
 from langcheck.llm.async_openai_chat import AsyncOpenAIChatClient
 from langcheck.llm.models import ChatOptions
 from langcheck.llm.structured import Failed
+from langcheck.proposal.loaded import load_proposing
 from langcheck.scoring.factory import AdapterLoader, load_adapter, open_ranker
 from langcheck.settings.loading import ClientSettings
 from langcheck.tagging.loaded import load_trained
@@ -66,6 +72,7 @@ async def open_local(
     transport: httpx.AsyncBaseTransport | None,
     load: AdapterLoader = load_adapter,
     load_tagger: TaggerLoader = load_trained,
+    load_proposer: ProposerLoader = load_proposing,
 ) -> AsyncGenerator[LocalChecker]:
     """A checker that talks to the LLM directly (and loads the configured scorer), open
     for the duration of the block.
@@ -86,11 +93,16 @@ async def open_local(
             ranker=ranker,
             max_words=settings.checker.max_words,
         )
-        if settings.correction.checkpoint is not None:
+        checkpoint = settings.correction.checkpoint
+        if checkpoint is not None and settings.correction.proposer is not None:
+            checker = await open_proposing_checker(
+                settings.correction, checkpoint, settings.correction.proposer, load=load_proposer
+            )
+        elif checkpoint is not None:
             checker = await open_correction_checker(
                 llm,
                 settings.correction,
-                settings.correction.checkpoint,
+                checkpoint,
                 model=settings.llm.model,
                 load=load_tagger,
             )

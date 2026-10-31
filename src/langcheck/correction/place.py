@@ -22,6 +22,7 @@ from langcheck.tagging.document import SentenceInText
 from langcheck.tagging.tiers import TextFlag
 from langcheck.taxonomy.kinds import ErrorKind
 
+_ATTACHING = frozenset(",.;:!?")
 _KINDS_BY_NAME = {kind.value.casefold(): kind for kind in ErrorKind}
 
 
@@ -71,6 +72,16 @@ def _deletion(sentence: SentenceInText, span: CharSpan) -> CharSpan:
     return span
 
 
+def _attached(sentence: SentenceInText, span: CharSpan, replacement: str) -> CharSpan:
+    """``span`` with the space before it when ``replacement`` starts with punctuation that
+    attaches to the previous word, so a word becoming a comma leaves no space before it.
+    """
+    start = span.start - sentence.span.start
+    if replacement[0] in _ATTACHING and sentence.text[start - 1 : start] == " ":
+        return CharSpan(span.start - 1, span.end)
+    return span
+
+
 def _place(
     correction: ReplyCorrection,
     position: int,
@@ -98,6 +109,8 @@ def _place(
         replacement = _insertion(sentence, span.start, replacement)
     elif not replacement:
         span = _deletion(sentence, span)
+    else:
+        span = _attached(sentence, span, replacement)
     candidate = Candidate(
         span=span,
         original=original,
@@ -120,14 +133,16 @@ def place_corrections(
     flag: TextFlag,
     *,
     policy: CorrectionPolicy,
+    limit: int | None = None,
 ) -> Pending:
-    """The first ``policy.count`` of ``corrections`` placed in the text; later ones that
-    would give the same sentence as an earlier one are rejected as duplicates.
+    """The first ``limit`` (by default ``policy.count``) of ``corrections`` placed in the
+    text; later ones that would give the same sentence as an earlier one are rejected as
+    duplicates.
     """
     candidates: list[Candidate] = []
     rejected: list[Rejected] = []
     seen: set[str] = set()
-    for position, correction in enumerate(corrections[: policy.count]):
+    for position, correction in enumerate(corrections[: limit or policy.count]):
         match _place(correction, position, flagged.sentence, flag, policy):
             case Rejected() as refused:
                 rejected.append(refused)

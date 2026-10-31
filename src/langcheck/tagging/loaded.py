@@ -6,10 +6,14 @@ import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from langcheck.tagging.models import SentenceReading, SlotScores
 from langcheck.tagging.protocols import GapCommaScorer, SentenceReader, SlotScorer
 from langcheck.tagging.reading import PairedReader
+
+if TYPE_CHECKING:
+    from langcheck.tagging.checkpoint import Checkpoint
 
 MAX_VRAM_SHARE = 0.8
 
@@ -92,6 +96,11 @@ def torch_limit(device: object) -> None:
 
 def load_trained(path: Path, *, device: str) -> Trained:
     """The tagger saved at ``path``, safe to call from several threads. Blocking."""
+    return load_trained_with(path, device=device)[0]
+
+
+def load_trained_with(path: Path, *, device: str) -> tuple[Trained, Checkpoint, threading.Lock]:
+    """:func:`load_trained`, with the checkpoint and lock for anything else using the model."""
     import torch
 
     from langcheck.tagging.checkpoint import load_checkpoint
@@ -111,7 +120,7 @@ def load_trained(path: Path, *, device: str) -> Trained:
             CommaScorer(loaded.tagger, head, loaded.tokenizer, device=target, max_length=length),
             lock,
         )
-    return Trained(
+    trained = Trained(
         OneAtATimeScorer(
             TaggerScorer(loaded.tagger, loaded.tokenizer, device=target, max_length=length), lock
         ),
@@ -131,3 +140,4 @@ def load_trained(path: Path, *, device: str) -> Trained:
             lock,
         ),
     )
+    return trained, loaded, lock

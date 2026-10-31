@@ -1,4 +1,4 @@
-"""From text to ranked corrections: flag, ask the LLM about the flags, judge its answers."""
+"""From text to ranked corrections: flag, have a corrector write fixes, judge them."""
 
 import asyncio
 from collections.abc import Sequence
@@ -9,15 +9,9 @@ from langcheck.correction.models import (
     FlaggedSentence,
     FlagOutcome,
     Pending,
-    Unavailable,
 )
-from langcheck.correction.place import place_corrections
-from langcheck.correction.prompt import correction_messages, flag_ids
+from langcheck.correction.protocols import Corrector
 from langcheck.correction.rank import rank_corrections
-from langcheck.correction.schemas import CorrectionReply, ReplyCorrection
-from langcheck.llm.models import ChatOptions
-from langcheck.llm.protocols import AsyncLLMClient
-from langcheck.llm.structured import Failed, Parsed, complete_structured
 from langcheck.tagging.document import SentenceInText, flag_sentences, in_text, read_sentences
 from langcheck.tagging.protocols import SentenceReader
 from langcheck.tagging.tiers import TierPolicy
@@ -25,16 +19,15 @@ from langcheck.tagging.tiers import TierPolicy
 
 @dataclass(frozen=True, slots=True)
 class CorrectionPipeline:
-    """Suggests corrections with an LLM, trusting only those the tagger agrees with.
+    """Suggests corrections, trusting only those the tagger agrees with.
 
     The tagger's models run in a worker thread, so they never block the event loop.
     """
 
-    llm: AsyncLLMClient
+    corrector: Corrector
     reader: SentenceReader
     tiers: TierPolicy
     policy: CorrectionPolicy
-    options: ChatOptions
     context_sentences: int
 
     async def suggest(self, text: str) -> list[FlagOutcome]:
@@ -44,7 +37,7 @@ class CorrectionPipeline:
     async def suggest_sentences(self, sentences: Sequence[SentenceInText]) -> list[FlagOutcome]:
         """An outcome for every flag of ``sentences``, in order."""
         flagged = await asyncio.to_thread(self._flag, sentences)
-        answers = await asyncio.gather(*(self._ask(sentence) for sentence in flagged))
+        answers = await self.corrector.correct(flagged)
         pending = [item for answer in answers for item in answer if isinstance(item, Pending)]
         corrected = iter(
             await asyncio.to_thread(
@@ -73,17 +66,3 @@ class CorrectionPipeline:
             for sentence, flags in zip(sentences, flagged, strict=True)
             if flags
         ]
-
-    async def _ask(self, flagged: FlaggedSentence) -> Sequence[Pending | Unavailable]:
-        messages = correction_messages(flagged, count=self.policy.count)
-        match await complete_structured(self.llm, messages, CorrectionReply, options=self.options):
-            case Failed(reason=reason):
-                return [Unavailable(flag, reason) for flag in flagged.flags]
-            case Parsed(value=reply):
-                by_id: dict[str, list[ReplyCorrection]] = {}
-                for answer in reply.flags:
-                    by_id.setdefault(answer.flag, []).extend(answer.corrections)
-                return [
-                    place_corrections(by_id.get(name, []), flagged, flag, policy=self.policy)
-                    for name, flag in flag_ids(flagged).items()
-                ]

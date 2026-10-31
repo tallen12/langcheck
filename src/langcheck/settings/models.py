@@ -168,12 +168,13 @@ class ScorerSettings(BaseModel):
 class CorrectionSettings(BaseModel):
     """Whether the per-token tagger finds errors for the LLM to correct, with the tagger
     judging the answers. No ``checkpoint`` (the default) means the LLM finds errors itself
-    and PyTorch is not needed.
+    and PyTorch is not needed. ``proposer`` replaces the LLM here with a local model.
     """
 
     model_config = _SECTION
 
     checkpoint: Path | None = None
+    proposer: Path | None = None
     device: str = "cpu"
     count: Annotated[int, Field(ge=1)] = DEFAULT_CORRECTIONS.count
     min_reduction: Annotated[float, Field(ge=0)] = DEFAULT_CORRECTIONS.min_reduction

@@ -8,8 +8,10 @@ slots, because one error often lights up several neighbouring slots.
 
 from collections.abc import Iterable, Sequence
 
+from langcheck.check.suggestion import Confidence
 from langcheck.correction.models import (
     Candidate,
+    CandidateOrder,
     Corrected,
     CorrectionPolicy,
     Pending,
@@ -70,9 +72,17 @@ def _judge(
         reason = RejectionReason.STILL_FLAGGED
     elif reduction < policy.min_reduction:
         reason = RejectionReason.NO_IMPROVEMENT
+    confidence = policy.confidence(reduction)
+    if reason is None and policy.gate is not None and candidate.belief is not None:
+        odds = policy.gate.score(
+            belief=candidate.belief, reduction=reduction, flag_score=pending.flag.score
+        )
+        if odds < policy.gate.hide:
+            reason = RejectionReason.UNLIKELY
+        confidence = Confidence.HIGH if odds >= policy.gate.confident else Confidence.LOW
     if reason is not None:
         return Rejected(candidate.original, candidate.replacement, reason, reduction, candidate)
-    return Ranked(candidate, score_before, score_after, policy.confidence(reduction))
+    return Ranked(candidate, score_before, score_after, confidence)
 
 
 def rank_corrections(
@@ -82,8 +92,8 @@ def rank_corrections(
     tiers: TierPolicy,
     policy: CorrectionPolicy,
 ) -> list[Corrected]:
-    """Each flag's corrections judged by the tagger, in one batch. Ties keep the LLM's
-    order. Blocking.
+    """Each flag's corrections judged by the tagger, in one batch: at most ``policy.count``
+    offered, ties keeping the corrector's order. Blocking.
     """
     placed = [(item, candidate) for item in pending for candidate in item.candidates]
     flagged_after = flag_sentences(
@@ -111,6 +121,7 @@ def rank_corrections(
                     ranked.append(kept)
                 case Rejected() as dropped:
                     rejected.append(dropped)
-        ranked.sort(key=lambda r: r.reduction, reverse=True)
-        results.append(Corrected(item.flag, tuple(ranked), tuple(rejected)))
+        if policy.order is CandidateOrder.REDUCTION:
+            ranked.sort(key=lambda r: r.reduction, reverse=True)
+        results.append(Corrected(item.flag, tuple(ranked[: policy.count]), tuple(rejected)))
     return results
