@@ -20,6 +20,7 @@ CONTEXT = {
     "summary": "A note.",
     "register": "neutral",
     "dialect": "en-US",
+    "glossary": [],
     "notes": "",
 }
 SERVICE_RESPONSE = {

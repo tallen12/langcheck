@@ -3,7 +3,7 @@
 
 Run with ``LANGCHECK_TEST_LLM_BASE_URL=http://localhost:11434/v1 uv run pytest -m llm``.
 ``LANGCHECK_TEST_LLM_MODEL`` picks the model (default ``qwen3:8b``),
-``LANGCHECK_TEST_LLM_API_KEY`` the key, and ``LANGCHECK_TEST_LLM_DISABLE_REASONING=1``
+``LANGCHECK_TEST_LLM_API_KEY`` the key, and ``LANGCHECK_TEST_LLM_REASONING_SWITCH=1``
 turns reasoning off on servers that take the switch (Ollama does).
 """
 
@@ -42,7 +42,7 @@ def config() -> ClientConfig:
         model=os.environ.get("LANGCHECK_TEST_LLM_MODEL", "qwen3:8b"),
         api_key=key if key else None,
         retries=1,
-        disable_reasoning=os.environ.get("LANGCHECK_TEST_LLM_DISABLE_REASONING", "") == "1",
+        reasoning_switch=os.environ.get("LANGCHECK_TEST_LLM_REASONING_SWITCH", "") == "1",
     )
 
 

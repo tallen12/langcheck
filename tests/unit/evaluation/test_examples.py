@@ -3,10 +3,9 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from langcheck.evaluation.datasets import Dataset, DatasetError
-from langcheck.evaluation.examples import Example, checked_text, load_corrected_pairs, load_examples
+from langcheck.evaluation.examples import Example, checked_text, load_examples
 from langcheck.evaluation.m2 import GoldEdit
 from langcheck.evaluation.models import ScoredEdit
 from tests.conftest import TokenDiffAnnotator
@@ -96,30 +95,3 @@ def test_references_must_line_up_with_sources(tmp_path: Path) -> None:
 
     with pytest.raises(DatasetError, match="differ in length"):
         load_examples(Dataset.JFLEG_DEV, [source, reference], TokenDiffAnnotator())
-
-
-def test_corrected_pairs_become_one_reference_each(tmp_path: Path) -> None:
-    path = tmp_path / "pairs.jsonl"
-    path.write_text(
-        '{"text": "He go home", "corrected": "He goes home", "extra": 1}\n'
-        "\n"
-        '{"text": "All fine", "corrected": "All fine"}\n'
-        '{"text": "Not read", "corrected": "Not read"}\n',
-        encoding="utf-8",
-    )
-
-    first, second = load_corrected_pairs(path, TokenDiffAnnotator(), limit=2)
-
-    assert first.text == "He go home"
-    assert first.source == ("He", "go", "home")
-    [[edit]] = first.annotators
-    assert (edit.start, edit.end, edit.correction) == (1, 2, ("goes",))
-    assert second.annotators == ((),)
-
-
-def test_a_line_without_a_correction_is_refused(tmp_path: Path) -> None:
-    path = tmp_path / "pairs.jsonl"
-    path.write_text('{"text": "He go home"}\n', encoding="utf-8")
-
-    with pytest.raises(ValidationError):
-        load_corrected_pairs(path, TokenDiffAnnotator())

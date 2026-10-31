@@ -48,7 +48,7 @@ class AsyncOpenAIChatClient:
             self._config.model,
             messages,
             options,
-            disable_reasoning=self._config.disable_reasoning,
+            reasoning_switch=self._config.reasoning_switch,
         )
         headers = auth_headers(self._config.api_key)
         last_problem = "no attempt made"

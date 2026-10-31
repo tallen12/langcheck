@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
-from langcheck.check.suggestion import Confidence
 from langcheck.lsp.positions import Range
 
 SOURCE = "langcheck"
@@ -19,7 +18,6 @@ class Diagnostic:
     suggestion_id: str
     original: str
     options: tuple[str, ...]
-    confidence: Confidence = Confidence.HIGH
 
 
 class ProxyCommand(StrEnum):

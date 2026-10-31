@@ -42,7 +42,7 @@ def make_client(
     *,
     api_key: str | None = None,
     retries: int = 3,
-    disable_reasoning: bool = False,
+    reasoning_switch: bool = False,
 ) -> tuple[OpenAIChatClient, list[float]]:
     waits: list[float] = []
     config = ClientConfig(
@@ -51,7 +51,7 @@ def make_client(
         api_key=api_key,
         retries=retries,
         backoff=1.0,
-        disable_reasoning=disable_reasoning,
+        reasoning_switch=reasoning_switch,
     )
     http = httpx.Client(transport=httpx.MockTransport(server))
     return OpenAIChatClient(http, config, sleep=waits.append), waits
@@ -80,7 +80,7 @@ def test_posts_the_chat_and_returns_the_first_choice() -> None:
 
 def test_turns_reasoning_off_only_on_servers_that_take_the_switch() -> None:
     server = Server([completion("a")])
-    client, _ = make_client(server, disable_reasoning=True)
+    client, _ = make_client(server, reasoning_switch=True)
 
     client.complete(MESSAGES, options=ChatOptions())
 
@@ -197,7 +197,7 @@ def test_request_body_adds_the_schema_and_keeps_thinking_when_asked() -> None:
         "m",
         MESSAGES,
         ChatOptions(json_schema=schema, schema_name="s", think=True),
-        disable_reasoning=True,
+        reasoning_switch=True,
     )
 
     assert body["response_format"] == {

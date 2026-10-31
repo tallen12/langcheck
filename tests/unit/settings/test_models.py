@@ -1,16 +1,10 @@
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from langcheck.correction.models import CorrectionPolicy
 from langcheck.llm.models import ClientConfig
 from langcheck.scoring.factory import ScorerAdapter, ScorerConfig
 from langcheck.scoring.policy import PLL_DEFAULT, KindPolicy, ScoringPolicy
-from langcheck.settings.models import (
-    CorrectionSettings,
-    HttpSettings,
-    LLMSettings,
-    ScorerSettings,
-)
+from langcheck.settings.models import HttpSettings, LLMSettings, ScorerSettings
 from langcheck.taxonomy.kinds import ErrorKind
 
 
@@ -66,17 +60,3 @@ def test_pll_alone_defaults_to_the_evaluated_policy() -> None:
     assert policy({"adapters": ["pll", "cola"]}) == ScoringPolicy()
     assert policy({"adapters": ["cola"]}) == ScoringPolicy()
     assert policy({"adapters": ["pll"], "policy": {}}) == ScoringPolicy()
-
-
-def test_correction_settings_default_to_no_tagger_and_give_the_policy() -> None:
-    settings = CorrectionSettings(count=2, min_reduction=0.2, confident_reduction=0.7)
-
-    assert settings.checkpoint is None
-    assert settings.policy() == CorrectionPolicy(
-        count=2, min_reduction=0.2, confident_reduction=0.7
-    )
-
-
-def test_correction_settings_refuse_a_bad_count() -> None:
-    with pytest.raises(ValidationError):
-        CorrectionSettings(count=0)

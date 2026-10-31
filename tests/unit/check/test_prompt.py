@@ -25,6 +25,7 @@ CONTEXT = DocumentContext(
     summary="A hobbit story.",
     register=Register.FICTION_DIALOGUE,
     dialect="en-GB",
+    glossary=("Bilbo",),
     notes="Past tense, third person.",
 )
 
@@ -32,7 +33,7 @@ CONTEXT = DocumentContext(
 def test_system_prompt_lists_every_kind_and_the_schema() -> None:
     prompt = system_prompt()
 
-    assert PROMPT_VERSION == "check-v2"
+    assert PROMPT_VERSION == "check-v1"
     assert "$" not in prompt.replace("$defs", "").replace("$ref", "")
     for kind in ErrorKind:
         assert f"- {kind.value}\n" in prompt
@@ -40,11 +41,12 @@ def test_system_prompt_lists_every_kind_and_the_schema() -> None:
 
 
 def test_user_prompt_has_context_neighbours_and_numbered_sentences() -> None:
-    prompt = user_prompt(CHUNK, CONTEXT)
+    prompt = user_prompt(CHUNK, CONTEXT, dictionary=["Shire", "Bilbo"])
 
     assert "- Summary: A hobbit story." in prompt
     assert "- Register: fiction-dialogue-heavy" in prompt
     assert "- Dialect: en-GB" in prompt
+    assert "- Glossary (never flag): Bilbo, Shire" in prompt
     assert "- Notes: Past tense, third person." in prompt
     assert prompt.index("Before text.") < prompt.index("[S2] Bilbo runned.")
     assert prompt.index("[S2] Bilbo runned.") < prompt.index("[S3] Its late.")
@@ -58,6 +60,7 @@ def test_user_prompt_leaves_out_missing_context() -> None:
 
     assert "do not check" not in prompt
     assert "- Summary: unknown" in prompt
+    assert "- Glossary (never flag): none" in prompt
 
 
 def test_check_messages_are_system_then_user() -> None:

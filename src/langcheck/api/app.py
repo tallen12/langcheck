@@ -39,10 +39,6 @@ class Services:
     limiter: CheckLimiter
     documents: DocumentService
     dictionary: DictionaryStore
-    check_contexts: ContextSource | None = None
-    """The context ``/check`` builds when the client sends none, if not from ``contexts``;
-    ``/context`` always uses ``contexts``.
-    """
 
 
 type ServicesFactory = Callable[[], AbstractAsyncContextManager[Services]]
@@ -103,7 +99,7 @@ def build_app(services: ServicesFactory) -> FastAPI:
 
     @app.post("/context")
     async def context(body: ContextRequest, caller: Annotated[User, Depends(user)]) -> ContextBody:
-        match await current().contexts.build(body.text):
+        match await current().contexts.build(body.text, dictionary=body.dictionary):
             case DocumentContext() as built:
                 return ContextBody.of(built)
             case Failed(reason=reason):
@@ -119,17 +115,21 @@ async def _check(services: Services, body: CheckRequest, caller: User) -> CheckR
     if body.context is not None:
         context = body.context.to_context()
     else:
-        contexts = services.check_contexts or services.contexts
-        context = await _context_or_empty(contexts, body.text)
+        # A one-shot check builds its context every time, so the stored dictionary stays
+        # out of it: in the glossary it would change the context version, and with it
+        # every cache key, whenever a word is added or removed.
+        context = await _context_or_empty(services.contexts, body.text, body.dictionary)
     result = await services.checker.check(
         body.text, user=caller.name, context=context, dictionary=words
     )
     return CheckResponse.of(result, context)
 
 
-async def _context_or_empty(contexts: ContextSource, text: str) -> DocumentContext:
+async def _context_or_empty(
+    contexts: ContextSource, text: str, dictionary: list[str]
+) -> DocumentContext:
     """A check goes ahead without context rather than failing when it cannot be built."""
-    match await contexts.build(text):
+    match await contexts.build(text, dictionary=dictionary):
         case DocumentContext() as built:
             return built
         case Failed():

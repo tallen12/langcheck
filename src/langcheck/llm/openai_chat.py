@@ -2,7 +2,7 @@
 
 Tested against Ollama 0.24, whose OpenAI-compatible endpoint ignores Ollama's own
 ``think`` flag but honours ``reasoning_effort: "none"``; that field is only sent when
-``ClientConfig.disable_reasoning`` is set.
+``ClientConfig.reasoning_switch`` is set.
 """
 
 import math
@@ -49,7 +49,7 @@ class OpenAIChatClient:
             self._config.model,
             messages,
             options,
-            disable_reasoning=self._config.disable_reasoning,
+            reasoning_switch=self._config.reasoning_switch,
         )
         headers = auth_headers(self._config.api_key)
         last_problem = "no attempt made"
@@ -81,11 +81,11 @@ def request_body(
     messages: Sequence[ChatMessage],
     options: ChatOptions,
     *,
-    disable_reasoning: bool = False,
+    reasoning_switch: bool = False,
 ) -> dict[str, object]:
     """The JSON body of a ``/chat/completions`` request.
 
-    ``reasoning_effort: "none"`` is added only with ``disable_reasoning``, for servers
+    ``reasoning_effort: "none"`` is added only with ``reasoning_switch``, for servers
     known to take it.
     """
     body: dict[str, object] = {
@@ -101,7 +101,7 @@ def request_body(
             "type": "json_schema",
             "json_schema": {"name": options.schema_name, "schema": dict(options.json_schema)},
         }
-    if disable_reasoning and not options.think:
+    if reasoning_switch and not options.think:
         body["reasoning_effort"] = "none"
     return body
 

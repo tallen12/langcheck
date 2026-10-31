@@ -56,7 +56,9 @@ class TypoChecker:
 
 
 class NoContexts:
-    async def build(self, text: str) -> DocumentContext | Failed:
+    async def build(
+        self, text: str, *, dictionary: Collection[str] = ()
+    ) -> DocumentContext | Failed:
         return DocumentContext.empty()
 
 

@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 
 from langcheck.api.client import ServiceError
 from langcheck.api.schemas import DocumentBody
-from langcheck.check.suggestion import Confidence
 from langcheck.lsp.models import (
     CodeAction,
     CommandAction,
@@ -114,7 +113,7 @@ class LspProxy:
                     uri=uri,
                     diagnostic=diagnostic,
                     replacement=option,
-                    preferred=index == 0 and diagnostic.confidence is Confidence.HIGH,
+                    preferred=index == 0,
                 )
                 for index, option in enumerate(diagnostic.options)
             ]
@@ -219,7 +218,6 @@ def diagnostics_for(text: str, snapshot: DocumentBody) -> list[Diagnostic]:
             suggestion_id=s.id,
             original=s.original,
             options=tuple(o.replacement for o in s.options),
-            confidence=s.confidence,
         )
         for s in snapshot.suggestions
     ]

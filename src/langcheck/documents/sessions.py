@@ -293,7 +293,7 @@ class DocumentSessions:
                 return
             try:
                 words = await asyncio.to_thread(self._dictionary.words, key.user, key.uri)
-                built = await self._context_for(document)
+                built = await self._context_for(document, words)
                 result = await self._checker.check(
                     document.text, user=key.user, context=built.context, dictionary=words
                 )
@@ -326,7 +326,7 @@ class DocumentSessions:
         self._publish(key, Snapshot.of(document))
         return document
 
-    async def _context_for(self, document: Document) -> BuiltContext:
+    async def _context_for(self, document: Document, words: frozenset[str]) -> BuiltContext:
         """The document's context, rebuilt when enough of the text changed since."""
         hashes = tuple(s.hash for s in segment(document.text, splitter=self._splitter).sentences)
         built = document.context
@@ -335,7 +335,7 @@ class DocumentSessions:
             and changed_share(built.sentence_hashes, hashes) <= self._refresh_share
         ):
             return built
-        fresh = await self._contexts.build(document.text)
+        fresh = await self._contexts.build(document.text, dictionary=words)
         if isinstance(fresh, DocumentContext):
             return BuiltContext(fresh, hashes)
         # Keep checking with the old context (or none) rather than failing the check.

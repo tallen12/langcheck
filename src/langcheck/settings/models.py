@@ -5,14 +5,12 @@ the domain's own values, for example :meth:`LLMSettings.client_config`.
 """
 
 from enum import StrEnum
-from pathlib import Path
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from langcheck.check.chunk import DEFAULT_MAX_WORDS
 from langcheck.context.builder import DEFAULT_MAX_PARAGRAPHS
-from langcheck.correction.models import CorrectionPolicy
 from langcheck.documents.sessions import DEFAULT_DEBOUNCE, DEFAULT_REFRESH_SHARE
 from langcheck.llm.models import ClientConfig
 from langcheck.scoring.factory import ScorerAdapter, ScorerConfig
@@ -21,9 +19,6 @@ from langcheck.scoring.threaded import DEFAULT_MAX_BATCH
 from langcheck.taxonomy.kinds import ErrorKind
 
 _SECTION = ConfigDict(frozen=True, extra="forbid")
-
-
-DEFAULT_CORRECTIONS = CorrectionPolicy()
 
 
 class HttpSettings(BaseModel):
@@ -46,7 +41,7 @@ class LLMSettings(BaseModel):
     timeout: Annotated[float, Field(gt=0)] = 120.0
     retries: Annotated[int, Field(ge=0)] = 3
     concurrency: Annotated[int, Field(ge=1)] = 4
-    disable_reasoning: bool = False
+    reasoning_switch: bool = False
 
     def client_config(self) -> ClientConfig:
         """The LLM client's configuration."""
@@ -57,7 +52,7 @@ class LLMSettings(BaseModel):
             timeout=self.timeout,
             retries=self.retries,
             concurrency=self.concurrency,
-            disable_reasoning=self.disable_reasoning,
+            reasoning_switch=self.reasoning_switch,
         )
 
 
@@ -163,29 +158,6 @@ class ScorerSettings(BaseModel):
         if adapters == (ScorerAdapter.PLL,):
             return PLL_DEFAULT
         return ScoringPolicy()
-
-
-class CorrectionSettings(BaseModel):
-    """Whether the per-token tagger finds errors for the LLM to correct, with the tagger
-    judging the answers. No ``checkpoint`` (the default) means the LLM finds errors itself
-    and PyTorch is not needed.
-    """
-
-    model_config = _SECTION
-
-    checkpoint: Path | None = None
-    device: str = "cpu"
-    count: Annotated[int, Field(ge=1)] = DEFAULT_CORRECTIONS.count
-    min_reduction: Annotated[float, Field(ge=0)] = DEFAULT_CORRECTIONS.min_reduction
-    confident_reduction: Annotated[float, Field(ge=0)] = DEFAULT_CORRECTIONS.confident_reduction
-
-    def policy(self) -> CorrectionPolicy:
-        """The correction domain's policy."""
-        return CorrectionPolicy(
-            count=self.count,
-            min_reduction=self.min_reduction,
-            confident_reduction=self.confident_reduction,
-        )
 
 
 class LimitsSettings(BaseModel):

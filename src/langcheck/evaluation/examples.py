@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import assert_never
 
-from pydantic import BaseModel, ConfigDict
-
 from langcheck.evaluation.datasets import SOURCES, Dataset, DatasetError, Format
 from langcheck.evaluation.detokenize import detokenize
 from langcheck.evaluation.m2 import read_m2
@@ -29,32 +27,6 @@ class Example:
     def tokenized(self) -> bool:
         """Whether ``text`` is the tokens joined by spaces, not normal spacing."""
         return self.text == " ".join(self.source)
-
-
-class CorrectedPair(BaseModel):
-    """One line of a corrections file; other fields on the line are ignored."""
-
-    model_config = ConfigDict(frozen=True, extra="ignore")
-
-    text: str
-    corrected: str
-
-
-def load_corrected_pairs(
-    path: Path, annotator: EditAnnotator, *, limit: int | None = None
-) -> list[Example]:
-    """The first ``limit`` lines of a JSONL file of ``text`` and its ``corrected`` form, one
-    reference each. The text stays as written; a line whose two forms agree has nothing to
-    correct, so any edit to it counts against the checker.
-    """
-    lines = [line for line in _lines(path) if line.strip()][:limit]
-    examples: list[Example] = []
-    for line in lines:
-        pair = CorrectedPair.model_validate_json(line)
-        tokens = tuple(annotator.tokenize(pair.text))
-        edits = annotator.reference_edits(tokens, annotator.tokenize(pair.corrected))
-        examples.append(Example(tokens, (tuple(edits),), pair.text))
-    return examples
 
 
 def checked_text(source: Sequence[str], annotator: EditAnnotator) -> str:

@@ -1,6 +1,7 @@
 """``langcheck tagger``: train the per-token error tagger, evaluate it and flag text."""
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Protocol
 
@@ -12,8 +13,8 @@ from langcheck.evaluation.examples import load_examples
 from langcheck.evaluation.m2 import AnnotatedSentence, read_m2
 from langcheck.tagging.alignment import preceding_text
 from langcheck.tagging.document import flag_text
-from langcheck.tagging.loaded import Trained, load_trained, torch_limit
 from langcheck.tagging.metrics import ScoredSentence
+from langcheck.tagging.protocols import GapCommaScorer, SlotScorer
 from langcheck.tagging.report import build_report, render_report
 from langcheck.tagging.tier_report import TierSentence, measure_tiers, render_tiers
 from langcheck.tagging.tiers import FlagKind, TextFlag, TierPolicy
@@ -23,6 +24,7 @@ FAILED = 2
 DEFAULT_DATA = Path("data") / "eval"
 DEFAULT_TRAINING_SETS = (Dataset.BEA19_TRAIN, Dataset.FCE_TRAIN)
 DEFAULT_MODEL = "roberta-large"
+MAX_VRAM_SHARE = 0.8
 
 DEFAULT_POLICY = TierPolicy()
 
@@ -31,6 +33,19 @@ type Guard = Callable[[Callable[[], int]], int]
 
 class TaggerTrainingError(Exception):
     """There are too few sentences to train on and choose a threshold with."""
+
+
+@dataclass(frozen=True, slots=True)
+class Trained:
+    """A loaded tagger and what evaluating it needs to know."""
+
+    scorer: SlotScorer
+    threshold: float
+    base_model: str
+    precision_target: float
+    commas: GapCommaScorer | None = None
+    context_sentences: int = 0
+    """``None`` until ``langcheck tagger train-commas`` has run on the checkpoint."""
 
 
 class TaggerRuntime(Protocol):
@@ -126,7 +141,30 @@ class TransformerRuntime:
 
     def load(self, path: Path, *, device: str) -> Trained:
         """The tagger saved at ``path``."""
-        return load_trained(path, device=device)
+        import torch
+
+        from langcheck.tagging.checkpoint import load_checkpoint
+        from langcheck.tagging.comma import CommaScorer, has_comma_head, load_comma_head
+        from langcheck.tagging.inference import TaggerScorer
+
+        target = torch.device(device)
+        torch_limit(target)
+        loaded = load_checkpoint(path, device=target)
+        length = loaded.info.max_length
+        commas = None
+        if has_comma_head(path):
+            head = load_comma_head(path, loaded.tagger, device=target)
+            commas = CommaScorer(
+                loaded.tagger, head, loaded.tokenizer, device=target, max_length=length
+            )
+        return Trained(
+            TaggerScorer(loaded.tagger, loaded.tokenizer, device=target, max_length=length),
+            loaded.info.threshold,
+            loaded.info.base_model,
+            loaded.info.precision_target,
+            commas,
+            loaded.info.context_sentences,
+        )
 
     def train_commas(
         self,
@@ -158,6 +196,14 @@ class TransformerRuntime:
             log=log,
         )
         save_comma_head(path, head)
+
+
+def torch_limit(device: object) -> None:
+    """Past VRAM the driver spills into system RAM, which can take the desktop down."""
+    import torch
+
+    if isinstance(device, torch.device) and device.type == "cuda":
+        torch.cuda.set_per_process_memory_fraction(MAX_VRAM_SHARE)
 
 
 def render_flag(text: str, flag: TextFlag) -> str:
@@ -362,7 +408,8 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
             trained = runtime.load(checkpoint, device=device)
             flags = flag_text(
                 text,
-                trained.reader,
+                trained.scorer,
+                trained.commas,
                 policy=TierPolicy(error=error, suggestion=suggestion),
                 context_sentences=trained.context_sentences,
             )

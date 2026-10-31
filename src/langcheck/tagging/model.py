@@ -33,21 +33,6 @@ class SlotTagger(torch.nn.Module):
         ).last_hidden_state
         return torch.cat([_pick(hidden, batch.gap_left), _pick(hidden, batch.gap_right)], dim=-1)
 
-    def read(self, batch: Batch) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Word logits, gap logits and :meth:`gap_states` from one pass, for inference: other
-        heads on the tagger need not run the encoder again. Without dropout.
-        """
-        hidden = self.encoder(
-            input_ids=batch.input_ids, attention_mask=batch.attention_mask
-        ).last_hidden_state
-        words = torch.cat([_pick(hidden, batch.word_first), _pick(hidden, batch.word_last)], dim=-1)
-        gaps = torch.cat([_pick(hidden, batch.gap_left), _pick(hidden, batch.gap_right)], dim=-1)
-        return (
-            self.word_head.forward(words).squeeze(-1),
-            self.gap_head.forward(gaps).squeeze(-1),
-            gaps,
-        )
-
     @override
     def forward(  # ty: ignore[invalid-mutable-override]  # torch types forward as an attribute
         self, batch: Batch

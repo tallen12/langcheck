@@ -11,7 +11,6 @@ from importlib.metadata import version
 from lsprotocol import types
 from pygls.lsp.server import LanguageServer
 
-from langcheck.check.suggestion import Confidence
 from langcheck.lsp.models import (
     SOURCE,
     CodeAction,
@@ -177,18 +176,11 @@ def from_lsp_range(range_: types.Range) -> Range:
 
 
 def to_lsp_diagnostic(diagnostic: Diagnostic) -> types.Diagnostic:
-    """A warning from ``langcheck``, or information when its confidence is low, whose code
-    is the error kind.
-    """
-    severity = (
-        types.DiagnosticSeverity.Warning
-        if diagnostic.confidence is Confidence.HIGH
-        else types.DiagnosticSeverity.Information
-    )
+    """A warning from ``langcheck`` whose code is the error kind."""
     return types.Diagnostic(
         range=to_lsp_range(diagnostic.range),
         message=diagnostic.message,
-        severity=severity,
+        severity=types.DiagnosticSeverity.Warning,
         code=diagnostic.kind,
         source=SOURCE,
         data={"suggestion_id": diagnostic.suggestion_id},

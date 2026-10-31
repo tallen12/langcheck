@@ -9,9 +9,6 @@ class SchemaError(ValueError):
     """The service sent JSON that does not have the expected shape."""
 
 
-LOW_CONFIDENCE = "low"
-
-
 @dataclass(frozen=True)
 class Suggestion:
     """A fix for ``text[start:end]``, options best first."""
@@ -68,17 +65,13 @@ def _suggestion(data: object) -> Suggestion:
     if not 0 <= start <= end:
         msg = f"bad span [{start}, {end})"
         raise SchemaError(msg)
-    explanation = _str(body, "explanation")
-    # LibreOffice has one kind of grammar underline, so the comment has to say it.
-    if body.get("confidence") == LOW_CONFIDENCE:
-        explanation = f"Low confidence. {explanation}".rstrip()
     return Suggestion(
         id=_str(body, "id"),
         start=start,
         end=end,
         original=_str(body, "original"),
         kind=_str(body, "kind"),
-        explanation=explanation,
+        explanation=_str(body, "explanation"),
         options=tuple(_str(_mapping(option, "option"), "replacement") for option in options),
     )
 

@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from typing import Protocol
 
-from langcheck.tagging.models import SentenceReading, SlotScores
+from langcheck.tagging.models import SlotScores
 
 
 class SlotScorer(Protocol):
@@ -23,14 +23,4 @@ class GapCommaScorer(Protocol):
         self, sentences: Sequence[Sequence[str]], *, contexts: Sequence[str] | None = None
     ) -> list[tuple[float, ...]]:
         """One tuple of ``len(words) + 1`` per sentence, in order. Blocking."""
-        ...
-
-
-class SentenceReader(Protocol):
-    """Reads already split sentences for everything flagging needs."""
-
-    def read(
-        self, sentences: Sequence[Sequence[str]], *, contexts: Sequence[str] | None = None
-    ) -> list[SentenceReading]:
-        """One reading per sentence, in order, each reading its context if given. Blocking."""
         ...

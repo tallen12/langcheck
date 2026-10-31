@@ -19,13 +19,3 @@ class SlotScores:
     def highest(self) -> float:
         """The sentence's score: the probability of its most likely error."""
         return max((*self.words, *self.gaps))
-
-
-@dataclass(frozen=True, slots=True)
-class SentenceReading:
-    """All a tagger says about a sentence. ``commas`` is each gap's probability that what is
-    missing there is a comma; ``None`` for a tagger without a comma head.
-    """
-
-    scores: SlotScores
-    commas: tuple[float, ...] | None

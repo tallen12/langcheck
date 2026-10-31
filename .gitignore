@@ -22,7 +22,6 @@ htmlcov/
 
 # Local config and secrets
 .env
-/langcheck.yaml
 secrets/
 
 # Agent-local state (shared instructions live in AGENTS.md)

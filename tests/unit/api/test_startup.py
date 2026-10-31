@@ -1,5 +1,4 @@
 import json
-import time
 from datetime import UTC
 from pathlib import Path
 
@@ -14,8 +13,7 @@ from langcheck.database.schema import open_database
 from langcheck.scoring.factory import ScorerAdapter, ScorerConfig
 from langcheck.scoring.protocols import SentenceScorer
 from langcheck.settings.loading import ServerSettings, load_settings
-from langcheck.tagging.loaded import Trained
-from tests.conftest import SyncTableScorer, WordTableTagger
+from tests.conftest import SyncTableScorer
 
 
 def settings_for(tmp_path: Path, *, auth: str) -> ServerSettings:
@@ -41,6 +39,7 @@ def fake_llm(request: httpx.Request) -> httpx.Response:
                 "summary": "A note.",
                 "register": "neutral",
                 "dialect": "en-US",
+                "glossary": [],
                 "notes": "",
             }
         )
@@ -119,104 +118,7 @@ def test_the_configured_scorer_ranks_options(tmp_path: Path) -> None:
 
     [suggestion] = response.json()["suggestions"]
     assert suggestion["options"] == [
-        {"replacement": "the", "score": 2.0, "delta": 2.0, "confidence": "high"},
-        {"replacement": "tea", "score": -1.0, "delta": -1.0, "confidence": "high"},
+        {"replacement": "the", "score": 2.0, "delta": 2.0},
+        {"replacement": "tea", "score": -1.0, "delta": -1.0},
     ]
     assert len(scorer.batches) == 1
-
-
-def correcting_llm(request: httpx.Request) -> httpx.Response:
-    """An LLM that describes every document the same way and corrects the tagger's flag."""
-    system = json.loads(request.content)["messages"][0]["content"]
-    if "error detector" in system:
-        content = json.dumps(
-            {
-                "flags": [
-                    {
-                        "flag": "F1",
-                        "corrections": [
-                            {"replacement": "goes", "kind": "VerbForm", "explanation": "Agrees."},
-                            {"replacement": "gone", "kind": "VerbForm", "explanation": "Past."},
-                        ],
-                    }
-                ]
-            }
-        )
-        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
-    return fake_llm(request)
-
-
-def test_a_configured_tagger_serves_one_shot_checks_and_documents(tmp_path: Path) -> None:
-    settings = load_settings(
-        ServerSettings,
-        overrides={
-            "auth": {"mode": "none"},
-            "database": {"url": f"sqlite:///{tmp_path / 'langcheck.db'}"},
-            "llm": {"base_url": "http://llm.test/v1", "retries": 0},
-            "checker": {"debounce": 0},
-            "correction": {"checkpoint": str(tmp_path / "tagger")},
-        },
-        yaml_data={},
-    )
-
-    def load(path: Path, *, device: str) -> Trained:
-        assert path == tmp_path / "tagger"
-        return Trained(WordTableTagger({"go": 0.9, "gone": 0.5}), 0.5, "base", 0.5)
-
-    app = build_app(
-        lambda: open_services(
-            settings, transport=httpx.MockTransport(correcting_llm), load_tagger=load
-        )
-    )
-
-    with TestClient(app) as client:
-        response = client.post("/check", json={"text": "He go home."})
-        [suggestion] = response.json()["suggestions"]
-        client.put("/documents/a.md", json={"text": "He go home."})
-        for _ in range(200):
-            body = client.get("/documents/a.md/suggestions").json()
-            if body["state"] != "checking" and body["suggestions"]:
-                break
-            time.sleep(0.01)
-
-    assert suggestion["original"] == "go"
-    assert suggestion["confidence"] == "high"
-    assert [(o["replacement"], o["confidence"]) for o in suggestion["options"]] == [
-        ("goes", "high"),
-        ("gone", "low"),
-    ]
-    assert body["suggestions"][0]["id"] == suggestion["id"]
-
-
-def test_a_configured_tagger_asks_the_llm_for_no_context_unless_told_to(tmp_path: Path) -> None:
-    settings = load_settings(
-        ServerSettings,
-        overrides={
-            "auth": {"mode": "none"},
-            "database": {"url": f"sqlite:///{tmp_path / 'langcheck.db'}"},
-            "llm": {"base_url": "http://llm.test/v1", "retries": 0},
-            "correction": {"checkpoint": str(tmp_path / "tagger")},
-        },
-        yaml_data={},
-    )
-    calls: list[str] = []
-
-    def counting(request: httpx.Request) -> httpx.Response:
-        calls.append(json.loads(request.content)["messages"][0]["content"][:30])
-        return fake_llm(request)
-
-    def load(path: Path, *, device: str) -> Trained:
-        return Trained(WordTableTagger({}), 0.5, "base", 0.5)
-
-    app = build_app(
-        lambda: open_services(settings, transport=httpx.MockTransport(counting), load_tagger=load)
-    )
-
-    with TestClient(app) as client:
-        checked = client.post("/check", json={"text": "All fine here."})
-        assert checked.status_code == 200
-        assert calls == []
-        built = client.post("/context", json={"text": "All fine here."})
-
-    assert built.json()["summary"] == "A note."
-    assert len(calls) == 1

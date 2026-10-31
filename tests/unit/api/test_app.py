@@ -23,6 +23,7 @@ CONTEXT = DocumentContext(
     summary="Notes.",
     register=Register.INFORMAL,
     dialect="en-GB",
+    glossary=("Bilbo",),
     notes="",
 )
 SUGGESTION = Suggestion(
@@ -69,9 +70,13 @@ class FixedContexts:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.built: list[str] = []
+        self.dictionaries: list[list[str]] = []
 
-    async def build(self, text: str) -> DocumentContext | Failed:
+    async def build(
+        self, text: str, *, dictionary: Collection[str] = ()
+    ) -> DocumentContext | Failed:
         self.built.append(text)
+        self.dictionaries.append(sorted(dictionary))
         return Failed("no reply") if self.fail else CONTEXT
 
 
@@ -147,10 +152,7 @@ def test_check_builds_context_and_returns_suggestions(checker: RecordingChecker)
                 "kind": "Spelling",
                 "operation": "R",
                 "explanation": "Misspelt.",
-                "options": [
-                    {"replacement": "the", "score": None, "delta": None, "confidence": "high"}
-                ],
-                "confidence": "high",
+                "options": [{"replacement": "the", "score": None, "delta": None}],
             }
         ],
         "unchecked": [{"start": 10, "end": 12, "reason": "LLM error: down"}],
@@ -158,6 +160,7 @@ def test_check_builds_context_and_returns_suggestions(checker: RecordingChecker)
             "summary": "Notes.",
             "register": "informal",
             "dialect": "en-GB",
+            "glossary": ["Bilbo"],
             "notes": "",
         },
     }
@@ -171,6 +174,7 @@ def test_check_uses_a_given_context_without_building_one(checker: RecordingCheck
         "summary": "S",
         "register": "formal",
         "dialect": "en-US",
+        "glossary": [],
         "notes": "",
     }
     with client_for(checker, contexts) as client:
@@ -178,7 +182,7 @@ def test_check_uses_a_given_context_without_building_one(checker: RecordingCheck
 
     assert response.status_code == 200
     assert contexts.built == []
-    assert checker.calls[0][2] == DocumentContext("S", Register.FORMAL, "en-US", "")
+    assert checker.calls[0][2] == DocumentContext("S", Register.FORMAL, "en-US", (), "")
 
 
 def test_check_goes_ahead_without_context_when_it_cannot_be_built(
@@ -235,3 +239,6 @@ def test_check_adds_the_stored_dictionary_of_the_named_document(
         )
 
     assert sorted(checker.calls[0][3]) == ["Bilbo", "Frodo", "Shire"]
+    # Stored words filter suggestions but stay out of the context, so editing the
+    # dictionary keeps the context version and the cached results.
+    assert contexts.dictionaries == [["Bilbo"]]

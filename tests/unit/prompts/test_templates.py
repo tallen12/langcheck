@@ -4,7 +4,7 @@ from langcheck.prompts.templates import load_template
 
 
 def test_loads_a_shipped_template() -> None:
-    template = load_template("check-v2")
+    template = load_template("check-v1")
 
     assert "$kinds" in template.template
     assert "$schema" in template.template

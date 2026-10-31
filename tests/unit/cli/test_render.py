@@ -10,7 +10,7 @@ from langcheck.context.models import DocumentContext, Register
 from langcheck.taxonomy.kinds import ErrorKind, Operation
 
 TEXT = "Intro.\n\nI think their going.\nNext line."
-CONTEXT = ContextBody.of(DocumentContext("S", Register.FORMAL, "en-GB", "n"))
+CONTEXT = ContextBody.of(DocumentContext("S", Register.FORMAL, "en-GB", ("Bilbo", "Shire"), "n"))
 
 
 def test_line_and_column_are_one_based() -> None:
@@ -57,7 +57,9 @@ def test_render_check_without_suggestions() -> None:
 
 
 def test_render_context_labels_each_field() -> None:
-    assert render_context(CONTEXT) == ("summary: S\nregister: formal\ndialect: en-GB\nnotes: n")
+    assert render_context(CONTEXT) == (
+        "summary: S\nregister: formal\ndialect: en-GB\nglossary: Bilbo, Shire\nnotes: n"
+    )
 
 
 def test_render_check_shows_score_deltas_when_ranked() -> None:

@@ -16,9 +16,9 @@ Three ideas shape the design:
    The server finds each span in the original itself and rejects any edit it cannot
    place. A model that rewrites the paragraph cannot slip changes through.
 2. **Document context, local chunks.** A short context summary of the whole document
-   (summary, register, dialect) is built once and sent with every chunk. Chunks are
-   small, so calls are fast and cache well, but the model still knows what the text is
-   and that the narrator writes in UK English.
+   (register, dialect, names, intentional nonstandard spellings) is built once and sent
+   with every chunk. Chunks are small, so calls are fast and cache well, but the model
+   still knows that "Bilbo" is a name and that the narrator writes in UK English.
 3. **Scored options.** Each issue offers 1 to 4 candidate replacements. A BERT-family
    scorer rates the original sentence and each candidate sentence and the options are
    ranked by how much they improve on it. The scorer may also drop issues, but only for
@@ -101,7 +101,8 @@ The prompt (versioned, kept in `src/langcheck/prompts/` so it ships inside the p
 
 - fix only spelling and grammar, using the kinds below; leave style, word choice that is
   not wrong, and content alone;
-- respect the document context's dialect and register;
+- respect the document context: names, dialect, register, and nonstandard spellings the
+  context marks as intentional;
 - quote the smallest span that needs to change, exactly as written;
 - give 1 to 4 replacements for that span, best first; give more than one only when they
   are really different fixes (for example "they're" and "they are").
@@ -176,7 +177,7 @@ An issue is rejected, and counted in metrics, when:
 - a replacement equals the original, or the issue has no options left;
 - the edit is too large to be a spelling or grammar fix: more than a few tokens changed,
   or a character edit ratio above a threshold, except for kinds such as WordOrder;
-- it overlaps a span the user dismissed.
+- it overlaps a span the user dismissed, or a term marked intentional in the context.
 
 Overlapping issues in one chunk are merged, keeping the higher-scored one.
 
@@ -224,13 +225,17 @@ long document, its first N and last N paragraphs plus a sample):
 - `summary`: two or three sentences on what the text is;
 - `register`: formal, neutral, informal, fiction-dialogue-heavy;
 - `dialect`: en-US, en-GB, en-AU, ... (spelling conventions);
+- `glossary`: names, product terms, invented words and intentional nonstandard spellings
+  (dialect speech, quoted errors) that must not be flagged;
 - `notes`: tense and person of narration, other conventions.
 
 It is versioned. It is rebuilt when a set share of the document (for example 20%) has
-changed since the last build, or when the client asks. An earlier version also had the
-LLM list intentional terms in a glossary that hid suggestions. It was removed because the
-LLM listed real errors there (such as `go` in "She go to the store") and hid their fixes.
-Only the user's dictionary hides suggestions: the checker drops issues on dictionary words after the result cache
+changed since the last build, or when the client asks. For an open document, words in
+its dictionary are passed to the builder, so they join the glossary of the next build. A
+one-shot `POST /check` builds a context on every request, so it leaves the stored
+dictionary out of the build: in the glossary it would change the context version, and
+with it every cache key, each time a word is added or removed. Dictionary words are not
+sent with each chunk: the checker drops issues on dictionary words after the result cache
 (pipeline step 6), so adding or removing a word never re-sends cached sentences to the
 LLM.
 
@@ -329,7 +334,7 @@ different things:
 - `ClientSettings`: `server` (URL, API key, timeout), and `llm`, `checker` and `scorer`
   for `--local` runs.
 - `ServerSettings`: `http` (host, port), `llm` (base URL, model, API key, timeout,
-  retries, concurrency, disabling reasoning), `scorer` (adapters, model names, device,
+  retries, concurrency, reasoning switch), `scorer` (adapters, model names, device,
   `ScoringPolicy` per kind), `auth` (mode, proxy user header), `database` (the SQL URL
   shared by API keys and dictionaries), `dictionary` (backend), `limits` (per-user requests in flight and per minute), `checker` (chunk
   size, debounce, context refresh share).

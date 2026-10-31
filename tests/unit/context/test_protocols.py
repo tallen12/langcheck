@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Collection
 
 from langcheck.context.models import DocumentContext
 from langcheck.context.protocols import ContextSource
@@ -8,7 +9,9 @@ from langcheck.llm.structured import Failed
 class EmptyContexts:
     """Describes every document as saying nothing."""
 
-    async def build(self, text: str) -> DocumentContext | Failed:
+    async def build(
+        self, text: str, *, dictionary: Collection[str] = ()
+    ) -> DocumentContext | Failed:
         return DocumentContext.empty()
 
 

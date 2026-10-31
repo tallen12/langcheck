@@ -156,6 +156,7 @@ class Checker:
                     reply,
                     {s.id: s for s in chunk.sentences},
                     policy=self._policy,
+                    intentional=context.glossary,
                 )
                 ranking = await self._ranker.rank(resolution.suggestions, chunk.sentences)
                 for sentence in chunk.sentences:
