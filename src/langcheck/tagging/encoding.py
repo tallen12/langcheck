@@ -53,9 +53,18 @@ def load_tokenizer(name: str | Path) -> PreTrainedTokenizerBase:
     return tokenizer
 
 
-def encode(words: Sequence[str], tokenizer: PreTrainedTokenizerBase, *, max_length: int) -> Encoded:
+def encode(
+    words: Sequence[str],
+    tokenizer: PreTrainedTokenizerBase,
+    *,
+    max_length: int,
+    context: str = "",
+) -> Encoded:
     """``words`` encoded with normal spacing, as a writer's text would be: the sets'
     space-separated tokens would teach the model their spacing, not grammar.
+
+    ``context`` goes before them to be read, never scored: it is cut from its start to fit
+    the limit, keeping what is nearest, and every position shifts past it.
     """
     text = detokenize(words)
     spans = word_spans(text, words)
@@ -81,7 +90,28 @@ def encode(words: Sequence[str], tokenizer: PreTrainedTokenizerBase, *, max_leng
     complete = len(first) == len(words)
     left = [0, *last] if complete else [0, *last[:-1]]
     right = [*first, len(input_ids) - 1] if complete else first
-    return Encoded(tuple(input_ids), tuple(first), tuple(last), tuple(left), tuple(right))
+    plain = Encoded(tuple(input_ids), tuple(first), tuple(last), tuple(left), tuple(right))
+    return _with_context(plain, context, tokenizer, max_length=max_length) if context else plain
+
+
+def _with_context(
+    encoded: Encoded, context: str, tokenizer: PreTrainedTokenizerBase, *, max_length: int
+) -> Encoded:
+    """``encoded`` as ``<s> context </s></s> sentence </s>``, the pair form RoBERTa expects."""
+    separator = int(tokenizer.sep_token_id or 0)
+    room = max_length - len(encoded.input_ids) - 2
+    if room <= 0:
+        return encoded
+    ids = [int(token) for token in tokenizer(context, add_special_tokens=False)["input_ids"]]
+    kept = ids[-room:]
+    shift = len(kept) + 2
+    return Encoded(
+        (encoded.input_ids[0], *kept, separator, separator, *encoded.input_ids[1:]),
+        tuple(position + shift for position in encoded.word_first),
+        tuple(position + shift for position in encoded.word_last),
+        tuple(position + shift for position in encoded.gap_left),
+        tuple(position + shift for position in encoded.gap_right),
+    )
 
 
 def _pad(rows: Sequence[Sequence[int]], value: int = 0) -> torch.Tensor:

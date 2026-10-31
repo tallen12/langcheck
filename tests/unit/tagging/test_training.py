@@ -8,6 +8,7 @@ from langcheck.tagging.labels import SlotLabels
 from langcheck.tagging.training import (
     HOLDOUT_BLOCK,
     HOLDOUT_EVERY,
+    InContext,
     TrainingOptions,
     sentence_labels,
     split_holdout,
@@ -42,13 +43,13 @@ def test_training_learns_a_word_and_chooses_a_threshold(
 ) -> None:
     tagger = tiny_tagger(tiny_tokenizer)
     lines: list[str] = []
-    sentences = [WRONG, RIGHT] * 8
+    sentences = [InContext(WRONG), InContext(RIGHT)] * 8
 
     result = train(
         tagger,
         tiny_tokenizer,
         sentences,
-        [WRONG, RIGHT],
+        [InContext(WRONG), InContext(RIGHT)],
         device=CPU,
         options=TrainingOptions(epochs=12, batch_size=4, learning_rate=3e-3, warmup_share=0.0),
         log=lines.append,
@@ -67,7 +68,7 @@ def test_training_needs_validation_sentences(tiny_tokenizer: PreTrainedTokenizer
         train(
             tiny_tagger(tiny_tokenizer),
             tiny_tokenizer,
-            [RIGHT],
+            [InContext(RIGHT)],
             [],
             device=CPU,
             options=TrainingOptions(),
@@ -80,8 +81,8 @@ def test_training_needs_an_epoch(tiny_tokenizer: PreTrainedTokenizerFast) -> Non
         train(
             tiny_tagger(tiny_tokenizer),
             tiny_tokenizer,
-            [RIGHT],
-            [RIGHT],
+            [InContext(RIGHT)],
+            [InContext(RIGHT)],
             device=CPU,
             options=TrainingOptions(epochs=0),
             log=lambda _: None,

@@ -30,9 +30,15 @@ class TaggerScorer:
         self._max_length = max_length
         self._batch_size = batch_size
 
-    def score(self, sentences: Sequence[Sequence[str]]) -> list[SlotScores]:
-        """One result per sentence, in order."""
-        encoded = [encode(s, self._tokenizer, max_length=self._max_length) for s in sentences]
+    def score(
+        self, sentences: Sequence[Sequence[str]], *, contexts: Sequence[str] | None = None
+    ) -> list[SlotScores]:
+        """One result per sentence, in order, each reading its context if given."""
+        texts = contexts if contexts is not None else [""] * len(sentences)
+        encoded = [
+            encode(s, self._tokenizer, max_length=self._max_length, context=c)
+            for s, c in zip(sentences, texts, strict=True)
+        ]
         order = sorted(range(len(encoded)), key=lambda index: len(encoded[index].input_ids))
         results: list[SlotScores | None] = [None] * len(encoded)
         self._tagger.eval()

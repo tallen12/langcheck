@@ -37,3 +37,16 @@ def test_slots_past_the_length_limit_score_zero(tiny_tokenizer: PreTrainedTokeni
     assert len(result.gaps) == 31
     assert result.words[-1] == result.gaps[-1] == 0.0
     assert result.words[0] > 0.0
+
+
+def test_context_changes_the_scores_of_the_same_words(
+    tiny_tokenizer: PreTrainedTokenizerFast,
+) -> None:
+    scorer = make_scorer(tiny_tokenizer, batch_size=2, limit=32)
+    words = ("The", "dog", ".")
+
+    [plain] = scorer.score([words])
+    [read] = scorer.score([words], contexts=["The cat sleeps."])
+
+    assert len(read.words) == len(plain.words)
+    assert read.words != plain.words

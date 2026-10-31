@@ -55,3 +55,40 @@ def test_collate_pads_and_cuts_labels_to_the_scored_slots(
 def test_a_missing_tokenizer_is_refused(tmp_path: object) -> None:
     with pytest.raises((ValueError, OSError)):
         load_tokenizer(f"{tmp_path}/none")
+
+
+def test_context_is_read_but_every_slot_stays_on_the_sentence(
+    tiny_tokenizer: PreTrainedTokenizerFast,
+) -> None:
+    plain = encode(WORDS, tiny_tokenizer, max_length=64)
+
+    with_context = encode(WORDS, tiny_tokenizer, max_length=64, context="The dog.")
+
+    shift = len(with_context.input_ids) - len(plain.input_ids)
+    assert shift > 2
+    assert with_context.word_first == tuple(p + shift for p in plain.word_first)
+    assert with_context.gap_right[-1] == len(with_context.input_ids) - 1
+    assert with_context.input_ids[-len(plain.input_ids) + 1 :] == plain.input_ids[1:]
+    # The separator right before the sentence stands where its start token did.
+    assert with_context.gap_left[0] == shift
+    assert with_context.input_ids[shift] == tiny_tokenizer.sep_token_id
+
+
+def test_context_is_cut_from_its_start_to_fit(tiny_tokenizer: PreTrainedTokenizerFast) -> None:
+    plain = encode(("dog",), tiny_tokenizer, max_length=16)
+
+    context = "The cat. " * 30 + "dog"
+
+    encoded = encode(("dog",), tiny_tokenizer, max_length=16, context=context)
+
+    assert len(encoded.input_ids) == 16
+    nearest = tiny_tokenizer(context, add_special_tokens=False)["input_ids"][-1]
+    assert encoded.input_ids[-len(plain.input_ids) - 2] == nearest
+
+
+def test_a_sentence_filling_the_limit_gets_no_context(
+    tiny_tokenizer: PreTrainedTokenizerFast,
+) -> None:
+    plain = encode(("dog",) * 40, tiny_tokenizer, max_length=8)
+
+    assert encode(("dog",) * 40, tiny_tokenizer, max_length=8, context="The cat.") == plain

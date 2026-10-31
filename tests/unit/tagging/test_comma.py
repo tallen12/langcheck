@@ -13,6 +13,7 @@ from langcheck.tagging.comma import (
     save_comma_head,
     train_comma_head,
 )
+from langcheck.tagging.training import InContext
 from tests.unit.tagging.test_model import tiny_tagger
 
 CPU = torch.device("cpu")
@@ -47,7 +48,7 @@ def test_the_head_learns_which_gaps_lack_commas_and_leaves_the_tagger_alone(
     head = train_comma_head(
         tagger,
         tiny_tokenizer,
-        [ADD_COMMA, ADD_THE] * 8,
+        [InContext(ADD_COMMA), InContext(ADD_THE)] * 8,
         device=CPU,
         max_length=32,
         log=lines.append,
@@ -67,7 +68,7 @@ def test_nothing_to_train_on_is_refused(tiny_tokenizer: PreTrainedTokenizerFast)
         train_comma_head(
             tiny_tagger(tiny_tokenizer),
             tiny_tokenizer,
-            [AnnotatedSentence(("a",), ((),))],
+            [InContext(AnnotatedSentence(("a",), ((),)))],
             device=CPU,
             max_length=32,
             log=lambda _: None,

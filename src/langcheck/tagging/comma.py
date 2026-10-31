@@ -13,6 +13,7 @@ from transformers import PreTrainedTokenizerBase
 from langcheck.evaluation.m2 import AnnotatedSentence
 from langcheck.tagging.encoding import collate, encode, to_device
 from langcheck.tagging.model import SlotTagger
+from langcheck.tagging.training import InContext
 
 COMMA = (",",)
 BATCH_SIZE = 64
@@ -61,19 +62,22 @@ def gap_labels(sentence: AnnotatedSentence) -> dict[int, bool]:
 def train_comma_head(
     tagger: SlotTagger,
     tokenizer: PreTrainedTokenizerBase,
-    sentences: Sequence[AnnotatedSentence],
+    items: Sequence[InContext],
     *,
     device: torch.device,
     max_length: int,
     log: Callable[[str], None],
 ) -> torch.nn.Linear:
-    """Fit the head on the gold insertions of ``sentences``. ``tagger`` does not change."""
-    wanted = [(s.tokens, gap_labels(s)) for s in sentences]
-    wanted = [(tokens, labels) for tokens, labels in wanted if labels]
+    """Fit the head on the gold insertions of ``items``. ``tagger`` does not change."""
+    wanted = [(i.sentence.tokens, gap_labels(i.sentence), i.context) for i in items]
+    wanted = [item for item in wanted if item[1]]
     if not wanted:
         msg = "no gold insertions to train on"
         raise ValueError(msg)
-    encoded = [encode(tokens, tokenizer, max_length=max_length) for tokens, _ in wanted]
+    encoded = [
+        encode(tokens, tokenizer, max_length=max_length, context=context)
+        for tokens, _, context in wanted
+    ]
     pad = int(tokenizer.pad_token_id or 0)
     states: list[torch.Tensor] = []
     labels: list[float] = []
@@ -122,9 +126,15 @@ class CommaScorer:
         self._device = device
         self._max_length = max_length
 
-    def score(self, sentences: Sequence[Sequence[str]]) -> list[tuple[float, ...]]:
+    def score(
+        self, sentences: Sequence[Sequence[str]], *, contexts: Sequence[str] | None = None
+    ) -> list[tuple[float, ...]]:
         """One tuple of ``len(words) + 1`` per sentence; gaps past the limit score 0."""
-        encoded = [encode(s, self._tokenizer, max_length=self._max_length) for s in sentences]
+        texts = contexts if contexts is not None else [""] * len(sentences)
+        encoded = [
+            encode(s, self._tokenizer, max_length=self._max_length, context=c)
+            for s, c in zip(sentences, texts, strict=True)
+        ]
         pad = int(self._tokenizer.pad_token_id or 0)
         results: list[tuple[float, ...]] = [()] * len(sentences)
         self._tagger.eval()

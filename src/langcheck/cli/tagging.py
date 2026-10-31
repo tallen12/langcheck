@@ -11,12 +11,13 @@ from langcheck.cli.environment import CliEnvironment
 from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.examples import load_examples
 from langcheck.evaluation.m2 import AnnotatedSentence, read_m2
-from langcheck.tagging.alignment import split_words, word_spans
+from langcheck.tagging.alignment import preceding_text
+from langcheck.tagging.document import flag_text
 from langcheck.tagging.metrics import ScoredSentence
 from langcheck.tagging.protocols import GapCommaScorer, SlotScorer
 from langcheck.tagging.report import build_report, render_report
 from langcheck.tagging.tier_report import TierSentence, measure_tiers, render_tiers
-from langcheck.tagging.tiers import FlagKind, TextFlag, TierPolicy, slot_flags, text_flag
+from langcheck.tagging.tiers import FlagKind, TextFlag, TierPolicy
 
 CLEAN = 0
 FAILED = 2
@@ -43,6 +44,7 @@ class Trained:
     base_model: str
     precision_target: float
     commas: GapCommaScorer | None = None
+    context_sentences: int = 0
     """``None`` until ``langcheck tagger train-commas`` has run on the checkpoint."""
 
 
@@ -58,6 +60,7 @@ class TaggerRuntime(Protocol):
         epochs: int,
         batch_size: int,
         precision: float,
+        context_sentences: int,
         device: str,
         log: Callable[[str], None],
     ) -> None:
@@ -92,6 +95,7 @@ class TransformerRuntime:
         epochs: int,
         batch_size: int,
         precision: float,
+        context_sentences: int,
         device: str,
         log: Callable[[str], None],
     ) -> None:
@@ -102,13 +106,16 @@ class TransformerRuntime:
         from langcheck.tagging.checkpoint import CheckpointInfo, save_checkpoint
         from langcheck.tagging.encoding import load_tokenizer
         from langcheck.tagging.model import SlotTagger
-        from langcheck.tagging.training import TrainingOptions, split_holdout, train
+        from langcheck.tagging.training import InContext, TrainingOptions, split_holdout, train
 
         options = TrainingOptions(epochs=epochs, batch_size=batch_size, precision=precision)
         target = torch.device(device)
+        torch_limit(target)
         tokenizer = load_tokenizer(base_model)
         tagger = SlotTagger(AutoModel.from_pretrained(base_model)).to(target)
-        training, validation = split_holdout(sentences)
+        contexts = preceding_text([s.tokens for s in sentences], context_sentences)
+        items = [InContext(s, c) for s, c in zip(sentences, contexts, strict=True)]
+        training, validation = split_holdout(items)
         if not validation:
             msg = f"{len(sentences)} sentences leave none for validation; use more"
             raise TaggerTrainingError(msg)
@@ -128,6 +135,7 @@ class TransformerRuntime:
                 train_sentences=len(training),
                 validation_sentences=len(validation),
                 epoch=result.epoch,
+                context_sentences=context_sentences,
             ),
         )
 
@@ -155,6 +163,7 @@ class TransformerRuntime:
             loaded.info.base_model,
             loaded.info.precision_target,
             commas,
+            loaded.info.context_sentences,
         )
 
     def train_commas(
@@ -170,12 +179,14 @@ class TransformerRuntime:
 
         from langcheck.tagging.checkpoint import load_checkpoint
         from langcheck.tagging.comma import save_comma_head, train_comma_head
-        from langcheck.tagging.training import split_holdout
+        from langcheck.tagging.training import InContext, split_holdout
 
         target = torch.device(device)
         torch_limit(target)
         loaded = load_checkpoint(path, device=target)
-        training, _ = split_holdout(sentences)
+        contexts = preceding_text([s.tokens for s in sentences], loaded.info.context_sentences)
+        items = [InContext(s, c) for s, c in zip(sentences, contexts, strict=True)]
+        training, _ = split_holdout(items)
         head = train_comma_head(
             loaded.tagger,
             loaded.tokenizer,
@@ -231,6 +242,7 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
         batch_size: int = 16,
         precision: Annotated[float, Parameter(help="Precision to choose a threshold at.")] = 0.5,
         limit: Annotated[int | None, Parameter(help="Only the first N sentences.")] = None,
+        context: Annotated[int, Parameter(help="Preceding sentences to read.")] = 0,
         device: DeviceOption = "cuda",
         data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
     ) -> int:
@@ -251,6 +263,7 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
                 epochs=epochs,
                 batch_size=batch_size,
                 precision=precision,
+                context_sentences=context,
                 device=device,
                 log=env.out,
             )
@@ -279,7 +292,10 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
                 return FAILED
             trained = runtime.load(checkpoint, device=device)
             examples = load_examples(dataset, files, env.edit_annotators(), limit=limit)
-            scores = trained.scorer.score([example.source for example in examples])
+            tokens = [example.source for example in examples]
+            scores = trained.scorer.score(
+                tokens, contexts=preceding_text(tokens, trained.context_sentences)
+            )
             report = build_report(
                 [
                     ScoredSentence(score, example.annotators)
@@ -344,8 +360,13 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
             trained = runtime.load(checkpoint, device=device)
             examples = load_examples(dataset, files, env.edit_annotators())
             tokens = [example.source for example in examples]
-            scores = trained.scorer.score(tokens)
-            commas = trained.commas.score(tokens) if trained.commas is not None else None
+            contexts = preceding_text(tokens, trained.context_sentences)
+            scores = trained.scorer.score(tokens, contexts=contexts)
+            commas = (
+                trained.commas.score(tokens, contexts=contexts)
+                if trained.commas is not None
+                else None
+            )
             report = measure_tiers(
                 [
                     TierSentence(
@@ -377,21 +398,25 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
         ] = False,
         device: DeviceOption = "cuda",
     ) -> int:
-        """Print TEXT's flags as character offsets, score, class and text."""
+        """Print the flags of TEXT, one or more sentences, as character offsets, score, class
+        and text.
+        """
 
         def run() -> int:
-            words = split_words(text)
-            if not words:
+            if not text.strip():
                 return CLEAN
             trained = runtime.load(checkpoint, device=device)
-            [scores] = trained.scorer.score([words])
-            commas = trained.commas.score([words])[0] if trained.commas is not None else None
-            policy = TierPolicy(error=error, suggestion=suggestion)
-            spans = word_spans(text, words)
-            for flag in slot_flags(scores, commas, policy):
+            flags = flag_text(
+                text,
+                trained.scorer,
+                trained.commas,
+                policy=TierPolicy(error=error, suggestion=suggestion),
+                context_sentences=trained.context_sentences,
+            )
+            for flag in flags:
                 if hide_commas and flag.kind is FlagKind.OPTIONAL_COMMA:
                     continue
-                env.out(render_flag(text, text_flag(flag, spans)))
+                env.out(render_flag(text, flag))
             return CLEAN
 
         return guarded(run)

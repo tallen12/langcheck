@@ -4,6 +4,8 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from langcheck.evaluation.detokenize import detokenize
+
 _WORD = re.compile(r"\w+(?:['\u2019]\w+)*|[^\w\s]")
 """A run of word characters with inner apostrophes, or one punctuation mark."""
 
@@ -33,3 +35,13 @@ def word_spans(text: str, words: Sequence[str]) -> list[CharSpan]:
 def split_words(text: str) -> tuple[str, ...]:
     """``text`` as words and punctuation marks."""
     return tuple(match.group() for match in _WORD.finditer(text))
+
+
+def preceding_text(sentences: Sequence[Sequence[str]], count: int) -> list[str]:
+    """For each of ``sentences``, the ``count`` before it as normally spaced text. The sets
+    mark no document boundaries, so this sometimes reaches into the previous document.
+    """
+    if count == 0:
+        return [""] * len(sentences)
+    texts = [detokenize(sentence) for sentence in sentences]
+    return [" ".join(texts[max(0, index - count) : index]) for index in range(len(texts))]

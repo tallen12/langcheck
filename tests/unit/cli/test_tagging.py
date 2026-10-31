@@ -31,7 +31,9 @@ A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||0
 
 
 class OnlySecondWord:
-    def score(self, sentences: Sequence[Sequence[str]]) -> list[SlotScores]:
+    def score(
+        self, sentences: Sequence[Sequence[str]], *, contexts: Sequence[str] | None = None
+    ) -> list[SlotScores]:
         return [
             SlotScores(
                 tuple(0.9 if index == 1 else 0.0 for index in range(len(s))),
@@ -44,6 +46,7 @@ class OnlySecondWord:
 @dataclass
 class FakeRuntime:
     trained_on: list[int] = field(default_factory=list)
+    context: list[int] = field(default_factory=list)
     commas: GapCommaScorer | None = None
     comma_runs: list[tuple[str, int, str]] = field(default_factory=list)
 
@@ -56,10 +59,12 @@ class FakeRuntime:
         epochs: int,
         batch_size: int,
         precision: float,
+        context_sentences: int,
         device: str,
         log: Callable[[str], None],
     ) -> None:
         self.trained_on.append(len(sentences))
+        self.context.append(context_sentences)
         log(f"{base_model} {epochs} {batch_size} {precision} {device} {output.name}")
 
     def load(self, path: Path, *, device: str) -> Trained:
@@ -101,6 +106,16 @@ def test_train_reads_both_training_sets(tmp_path: Path) -> None:
     assert "roberta-large 3 16 0.5 cpu out" in cli.output
 
 
+def test_train_can_read_preceding_sentences(tmp_path: Path) -> None:
+    write(tmp_path, Dataset.BEA19_TRAIN)
+    write(tmp_path, Dataset.FCE_TRAIN)
+    runtime = FakeRuntime()
+
+    assert run(Cli(tmp_path), runtime, "train", "out", "--context", "2") == 0
+
+    assert runtime.context == [2]
+
+
 def test_train_asks_for_missing_sets_to_be_fetched(tmp_path: Path) -> None:
     cli = Cli(tmp_path)
 
@@ -135,6 +150,14 @@ def test_flag_prints_offsets_and_a_tier(tmp_path: Path) -> None:
     assert cli.out == ["3-5\t0.900\terror\tgo"]
 
 
+def test_flag_covers_every_sentence_of_the_text(tmp_path: Path) -> None:
+    cli = Cli(tmp_path)
+
+    assert run(cli, FakeRuntime(), "flag", "ckpt", "He go home. We go out.") == 0
+
+    assert cli.out == ["3-5\t0.900\terror\tgo", "15-17\t0.900\terror\tgo"]
+
+
 def test_flag_lowers_the_tier_with_a_higher_error_threshold(tmp_path: Path) -> None:
     cli = Cli(tmp_path)
 
@@ -151,12 +174,16 @@ def test_flag_on_text_without_words_loads_nothing(tmp_path: Path) -> None:
 
 
 class GapBeforeLastWord:
-    def score(self, sentences: Sequence[Sequence[str]]) -> list[SlotScores]:
+    def score(
+        self, sentences: Sequence[Sequence[str]], *, contexts: Sequence[str] | None = None
+    ) -> list[SlotScores]:
         return [SlotScores((0.0,) * len(s), (0.0, 0.9, 0.0)) for s in sentences]
 
 
 class AllCommas:
-    def score(self, sentences: Sequence[Sequence[str]]) -> list[tuple[float, ...]]:
+    def score(
+        self, sentences: Sequence[Sequence[str]], *, contexts: Sequence[str] | None = None
+    ) -> list[tuple[float, ...]]:
         return [(0.9,) * (len(s) + 1) for s in sentences]
 
 
@@ -244,6 +271,7 @@ def test_too_few_sentences_for_validation_are_refused(
             epochs=1,
             batch_size=1,
             precision=0.5,
+            context_sentences=0,
             device="cpu",
             log=lambda _: None,
         )

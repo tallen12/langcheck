@@ -46,12 +46,18 @@ class TrainingResult:
     validation: Measurement
 
 
-def split_holdout(
-    sentences: Sequence[AnnotatedSentence],
-) -> tuple[list[AnnotatedSentence], list[AnnotatedSentence]]:
+@dataclass(frozen=True, slots=True)
+class InContext:
+    """A sentence and the text before it, read but never scored."""
+
+    sentence: AnnotatedSentence
+    context: str = ""
+
+
+def split_holdout[T](sentences: Sequence[T]) -> tuple[list[T], list[T]]:
     """``sentences`` as training and validation, split in blocks."""
-    train: list[AnnotatedSentence] = []
-    held: list[AnnotatedSentence] = []
+    train: list[T] = []
+    held: list[T] = []
     for index, sentence in enumerate(sentences):
         block = index // HOLDOUT_BLOCK
         (held if block % HOLDOUT_EVERY == HOLDOUT_EVERY - 1 else train).append(sentence)
@@ -64,11 +70,12 @@ def sentence_labels(sentence: AnnotatedSentence) -> SlotLabels:
     return slot_labels(len(sentence.tokens), spans)
 
 
-def validate(
-    scorer: TaggerScorer, sentences: Sequence[AnnotatedSentence], *, precision: float
-) -> Measurement:
+def validate(scorer: TaggerScorer, items: Sequence[InContext], *, precision: float) -> Measurement:
     """The best operating point on ``sentences`` at ``precision``."""
-    scores = scorer.score([sentence.tokens for sentence in sentences])
+    sentences = [item.sentence for item in items]
+    scores = scorer.score(
+        [sentence.tokens for sentence in sentences], contexts=[item.context for item in items]
+    )
     scored = [
         ScoredSentence(
             score,
@@ -85,22 +92,25 @@ def validate(
 def train(
     tagger: SlotTagger,
     tokenizer: PreTrainedTokenizerBase,
-    sentences: Sequence[AnnotatedSentence],
-    validation: Sequence[AnnotatedSentence],
+    items: Sequence[InContext],
+    validation: Sequence[InContext],
     *,
     device: torch.device,
     options: TrainingOptions,
     log: Callable[[str], None],
 ) -> TrainingResult:
-    """Fine-tune ``tagger`` on ``sentences``; it ends with its best epoch's weights."""
+    """Fine-tune ``tagger`` on ``items``; it ends with its best epoch's weights."""
     if not validation:
         msg = "no validation sentences: a threshold cannot be chosen without them"
         raise ValueError(msg)
     torch.manual_seed(options.seed)
     shuffler = random.Random(options.seed)
     pad = int(tokenizer.pad_token_id or 0)
-    encoded = [encode(s.tokens, tokenizer, max_length=options.max_length) for s in sentences]
-    labels = [sentence_labels(s) for s in sentences]
+    encoded = [
+        encode(i.sentence.tokens, tokenizer, max_length=options.max_length, context=i.context)
+        for i in items
+    ]
+    labels = [sentence_labels(i.sentence) for i in items]
     scorer = TaggerScorer(tagger, tokenizer, device=device, max_length=options.max_length)
     optimizer = torch.optim.AdamW(
         tagger.parameters(), lr=options.learning_rate, weight_decay=options.weight_decay

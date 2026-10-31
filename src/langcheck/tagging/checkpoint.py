@@ -26,6 +26,8 @@ class CheckpointInfo(BaseModel):
     train_sentences: int
     validation_sentences: int
     epoch: int
+    context_sentences: int = 0
+    """How many preceding sentences the tagger reads; older checkpoints read none."""
 
 
 @dataclass(frozen=True, slots=True)
