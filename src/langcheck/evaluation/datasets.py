@@ -1,4 +1,4 @@
-"""The annotated sets the plan evaluates on, and fetching them.
+"""The annotated sets the plan evaluates and trains on, and fetching them.
 
 Files are kept under ``data/eval/<name>/`` (``/data/`` is not committed). Each set is
 downloaded once, as published, and only the files it needs are unpacked.
@@ -20,6 +20,8 @@ class Dataset(StrEnum):
     BEA19_DEV = "bea19-dev"
     CONLL14_TEST = "conll14-test"
     JFLEG_DEV = "jfleg-dev"
+    BEA19_TRAIN = "bea19-train"
+    FCE_TRAIN = "fce-train"
 
 
 class Format(StrEnum):
@@ -69,6 +71,18 @@ SOURCES: dict[Dataset, Source] = {
         ),
         format=Format.REFERENCES,
         licence="JFLEG, CC BY-NC-SA 4.0",
+    ),
+    Dataset.BEA19_TRAIN: Source(
+        url="https://www.cl.cam.ac.uk/research/nl/bea2019st/data/wi+locness_v2.1.bea19.tar.gz",
+        members=("wi+locness/m2/ABC.train.gold.bea19.m2",),
+        format=Format.M2,
+        licence="W&I+LOCNESS v2.1, for research use (see the BEA-2019 shared task site)",
+    ),
+    Dataset.FCE_TRAIN: Source(
+        url="https://www.cl.cam.ac.uk/research/nl/bea2019st/data/fce_v2.1.bea19.tar.gz",
+        members=("fce/m2/fce.train.gold.bea19.m2",),
+        format=Format.M2,
+        licence="FCE v2.1, for research use (see the BEA-2019 shared task site)",
     ),
 }
 
