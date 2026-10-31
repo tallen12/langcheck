@@ -72,21 +72,27 @@ def _deletion(sentence: SentenceInText, span: CharSpan) -> CharSpan:
 
 
 def _place(
-    correction: ReplyCorrection, sentence: SentenceInText, flag: TextFlag, policy: CorrectionPolicy
-) -> Candidate | RejectionReason:
+    correction: ReplyCorrection,
+    position: int,
+    sentence: SentenceInText,
+    flag: TextFlag,
+    policy: CorrectionPolicy,
+) -> Candidate | Rejected:
+    def refused(reason: RejectionReason, candidate: Candidate | None = None) -> Rejected:
+        return Rejected(correction.original, correction.replacement, reason, None, candidate)
+
     kind = _KINDS_BY_NAME.get(correction.kind.strip().casefold())
     if kind is None:
-        return RejectionReason.UNKNOWN_KIND
+        return refused(RejectionReason.UNKNOWN_KIND)
     span = _quote_at_flag(sentence, correction.original, flag)
     if span is None:
-        return RejectionReason.NOT_AT_FLAG
+        return refused(RejectionReason.NOT_AT_FLAG)
     offset = sentence.span.start
     original = sentence.text[span.start - offset : span.end - offset]
     replacement = correction.replacement.strip()
     if replacement == original:
-        return RejectionReason.NO_CHANGE
-    if not policy.edit.allows(kind, original, replacement):
-        return RejectionReason.TOO_LARGE
+        return refused(RejectionReason.NO_CHANGE)
+    too_large = not policy.edit.allows(kind, original, replacement)
     operation = derive_operation(original, replacement)
     if not original:
         replacement = _insertion(sentence, span.start, replacement)
@@ -99,9 +105,12 @@ def _place(
         kind=kind,
         operation=operation,
         explanation=correction.explanation,
+        position=position,
     )
+    if too_large:
+        return refused(RejectionReason.TOO_LARGE, candidate)
     if not split_words(corrected_sentence(sentence, candidate)):
-        return RejectionReason.EMPTIES_SENTENCE
+        return refused(RejectionReason.EMPTIES_SENTENCE)
     return candidate
 
 
@@ -118,14 +127,23 @@ def place_corrections(
     candidates: list[Candidate] = []
     rejected: list[Rejected] = []
     seen: set[str] = set()
-    for correction in corrections[: policy.count]:
-        placed = _place(correction, flagged.sentence, flag, policy)
-        if isinstance(placed, Candidate):
-            corrected = corrected_sentence(flagged.sentence, placed)
-            if corrected not in seen:
-                seen.add(corrected)
-                candidates.append(placed)
-                continue
-            placed = RejectionReason.DUPLICATE
-        rejected.append(Rejected(correction.original, correction.replacement, placed))
+    for position, correction in enumerate(corrections[: policy.count]):
+        match _place(correction, position, flagged.sentence, flag, policy):
+            case Rejected() as refused:
+                rejected.append(refused)
+            case Candidate() as placed:
+                corrected = corrected_sentence(flagged.sentence, placed)
+                if corrected in seen:
+                    rejected.append(
+                        Rejected(
+                            correction.original,
+                            correction.replacement,
+                            RejectionReason.DUPLICATE,
+                            None,
+                            placed,
+                        )
+                    )
+                else:
+                    seen.add(corrected)
+                    candidates.append(placed)
     return Pending(flagged, flag, tuple(candidates), tuple(rejected))

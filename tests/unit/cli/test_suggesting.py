@@ -5,9 +5,17 @@ from pathlib import Path
 
 import httpx
 
-from langcheck.cli.suggesting import CLEAN, FOUND, render_outcome, render_rejected, suggest_app
+from langcheck.cli.suggesting import (
+    CLEAN,
+    FAILED,
+    FOUND,
+    render_outcome,
+    render_rejected,
+    suggest_app,
+)
 from langcheck.cli.tagging import Trained
 from langcheck.correction.models import Corrected, Rejected, RejectionReason, Unavailable
+from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.m2 import AnnotatedSentence
 from langcheck.settings.loading import ClientSettings, load_settings
 from langcheck.tagging.alignment import CharSpan
@@ -99,6 +107,30 @@ def test_suggest_can_show_what_it_rejected(tmp_path: Path) -> None:
 
 def test_clean_text_exits_clean(tmp_path: Path) -> None:
     assert run(Cli(tmp_path), "tagger", "All is well.") == CLEAN
+
+
+def test_measure_scores_a_fetched_set_and_saves_the_report(tmp_path: Path) -> None:
+    [path] = dataset_files(Dataset.BEA19_DEV, tmp_path / "data" / "eval")
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "S He go home .\nA 1 2|||R:VERB:SVA|||goes|||REQUIRED|||-NONE-|||0\n", encoding="utf-8"
+    )
+    cli = Cli(tmp_path)
+
+    code = run(
+        cli, "measure", "tagger", "bea19-dev", "--output", str(tmp_path / "out" / "report.json")
+    )
+
+    assert code == CLEAN
+    assert "tagger-ranked\t1.000\t1.000\t1.000" in cli.output
+    assert "bea19-dev" in (tmp_path / "out" / "report.json").read_text(encoding="utf-8")
+
+
+def test_measure_asks_for_a_set_not_yet_fetched(tmp_path: Path) -> None:
+    cli = Cli(tmp_path)
+
+    assert run(cli, "measure", "tagger", "bea19-dev") == FAILED
+    assert "fetch bea19-dev" in "\n".join(cli.err)
 
 
 def test_an_unavailable_flag_says_why() -> None:

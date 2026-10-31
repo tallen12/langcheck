@@ -1,7 +1,8 @@
 """``langcheck suggest``: flag a text with the tagger and have the LLM correct the flags."""
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
@@ -9,7 +10,8 @@ import httpx
 from cyclopts import App, Parameter
 
 from langcheck.cli.environment import CliEnvironment
-from langcheck.cli.tagging import DEFAULT_POLICY, TaggerRuntime, Trained, render_flag
+from langcheck.cli.tagging import DEFAULT_DATA, DEFAULT_POLICY, TaggerRuntime, Trained, render_flag
+from langcheck.correction.measure import measure, render_measurement, suggest_all
 from langcheck.correction.models import (
     Corrected,
     CorrectionPolicy,
@@ -19,6 +21,8 @@ from langcheck.correction.models import (
     Unavailable,
 )
 from langcheck.correction.pipeline import CorrectionPipeline
+from langcheck.evaluation.datasets import Dataset, dataset_files
+from langcheck.evaluation.examples import load_examples
 from langcheck.llm.async_openai_chat import AsyncOpenAIChatClient
 from langcheck.llm.models import ChatOptions
 from langcheck.settings.loading import ClientSettings
@@ -26,6 +30,7 @@ from langcheck.tagging.tiers import TierPolicy
 
 CLEAN = 0
 FOUND = 1
+FAILED = 2
 
 DEFAULT_CORRECTIONS = CorrectionPolicy()
 
@@ -73,15 +78,12 @@ def suggest_app(
         result_action="return_value",
     )
 
-    async def outcomes(
-        text: str,
-        trained: Trained,
-        loaded: ClientSettings,
-        tiers: TierPolicy,
-        policy: CorrectionPolicy,
-    ) -> list[FlagOutcome]:
+    @asynccontextmanager
+    async def open_pipeline(
+        trained: Trained, loaded: ClientSettings, tiers: TierPolicy, policy: CorrectionPolicy
+    ) -> AsyncGenerator[CorrectionPipeline]:
         async with httpx.AsyncClient(transport=env.transport) as http:
-            pipeline = CorrectionPipeline(
+            yield CorrectionPipeline(
                 llm=AsyncOpenAIChatClient(http, loaded.llm.client_config()),
                 scorer=trained.scorer,
                 commas=trained.commas,
@@ -90,7 +92,28 @@ def suggest_app(
                 options=ChatOptions(),
                 context_sentences=trained.context_sentences,
             )
+
+    async def outcomes(
+        text: str,
+        trained: Trained,
+        loaded: ClientSettings,
+        tiers: TierPolicy,
+        policy: CorrectionPolicy,
+    ) -> list[FlagOutcome]:
+        async with open_pipeline(trained, loaded, tiers, policy) as pipeline:
             return await pipeline.suggest(text)
+
+    async def outcomes_of_all(
+        texts: Sequence[str],
+        trained: Trained,
+        loaded: ClientSettings,
+        tiers: TierPolicy,
+        policy: CorrectionPolicy,
+    ) -> list[list[FlagOutcome]]:
+        async with open_pipeline(trained, loaded, tiers, policy) as pipeline:
+            return await suggest_all(
+                pipeline, texts, concurrency=loaded.llm.concurrency, log=env.err
+            )
 
     @app.default
     def suggest(
@@ -138,6 +161,57 @@ def suggest_app(
                 for line in render_outcome(text, outcome, show_rejected=show_rejected):
                     env.out(line)
             return FOUND if found else CLEAN
+
+        return guarded(run)
+
+    @app.command(name="measure")
+    def measure_command(
+        checkpoint: Path,
+        dataset: Dataset,
+        /,
+        *,
+        limit: Annotated[int | None, Parameter(help="Only the first N sentences.")] = 200,
+        output: Annotated[Path | None, Parameter(help="Also save the report here.")] = None,
+        count: Annotated[int, Parameter(help="Corrections to ask for per flag.")] = (
+            DEFAULT_CORRECTIONS.count
+        ),
+        min_reduction: Annotated[
+            float, Parameter(help="How much a correction must lower its sentence's score.")
+        ] = DEFAULT_CORRECTIONS.min_reduction,
+        device: Annotated[str, Parameter(help="PyTorch device, such as cpu or cuda.")] = "cuda",
+        data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
+        config: Annotated[Path | None, Parameter(help="YAML settings file.")] = None,
+        llm_url: Annotated[
+            str | None, Parameter(help="Base URL of the OpenAI-compatible API.")
+        ] = None,
+        llm_model: Annotated[str | None, Parameter(help="LLM model name.")] = None,
+    ) -> int:
+        """Score corrections and each filter against DATASET's references."""
+
+        def run() -> int:
+            files = dataset_files(dataset, data if data is not None else env.cwd / DEFAULT_DATA)
+            if not all(path.is_file() for path in files):
+                env.err(f"langcheck: run `langcheck evaluate fetch {dataset.value}` first")
+                return FAILED
+            loaded = settings(config, {"llm.base_url": llm_url, "llm.model": llm_model})
+            trained = runtime.load(checkpoint, device=device)
+            annotator = env.edit_annotators()
+            examples = load_examples(dataset, files, annotator, limit=limit)
+            found = asyncio.run(
+                outcomes_of_all(
+                    [example.text for example in examples],
+                    trained,
+                    loaded,
+                    DEFAULT_POLICY,
+                    CorrectionPolicy(count=count, min_reduction=min_reduction),
+                )
+            )
+            report = measure(examples, found, annotator, dataset=dataset.value)
+            if output is not None:
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+            env.out(render_measurement(report))
+            return CLEAN
 
         return guarded(run)
 

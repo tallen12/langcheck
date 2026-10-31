@@ -79,6 +79,8 @@ class Candidate:
     kind: ErrorKind
     operation: Operation
     explanation: str
+    position: int = 0
+    """Where the LLM put it among the flag's corrections, best first."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,12 +99,15 @@ class Ranked:
 
 @dataclass(frozen=True, slots=True)
 class Rejected:
-    """A correction not offered. ``reduction`` is ``None`` when it never reached the tagger."""
+    """A correction not offered. ``reduction`` is ``None`` when it never reached the tagger;
+    ``candidate`` is ``None`` when it could not be applied, so measuring cannot judge it.
+    """
 
     original: str
     replacement: str
     reason: RejectionReason
     reduction: float | None = None
+    candidate: Candidate | None = None
 
 
 @dataclass(frozen=True, slots=True)
