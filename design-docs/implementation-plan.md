@@ -334,7 +334,7 @@ different things:
 - `ClientSettings`: `server` (URL, API key, timeout), and `llm`, `checker` and `scorer`
   for `--local` runs.
 - `ServerSettings`: `http` (host, port), `llm` (base URL, model, API key, timeout,
-  retries, concurrency, reasoning switch), `scorer` (adapters, model names, device,
+  retries, concurrency, disabling reasoning), `scorer` (adapters, model names, device,
   `ScoringPolicy` per kind), `auth` (mode, proxy user header), `database` (the SQL URL
   shared by API keys and dictionaries), `dictionary` (backend), `limits` (per-user requests in flight and per minute), `checker` (chunk
   size, debounce, context refresh share).

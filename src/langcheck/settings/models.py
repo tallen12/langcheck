@@ -46,7 +46,7 @@ class LLMSettings(BaseModel):
     timeout: Annotated[float, Field(gt=0)] = 120.0
     retries: Annotated[int, Field(ge=0)] = 3
     concurrency: Annotated[int, Field(ge=1)] = 4
-    reasoning_switch: bool = False
+    disable_reasoning: bool = False
 
     def client_config(self) -> ClientConfig:
         """The LLM client's configuration."""
@@ -57,7 +57,7 @@ class LLMSettings(BaseModel):
             timeout=self.timeout,
             retries=self.retries,
             concurrency=self.concurrency,
-            reasoning_switch=self.reasoning_switch,
+            disable_reasoning=self.disable_reasoning,
         )
 
 

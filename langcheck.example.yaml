@@ -3,8 +3,8 @@
 llm:
   base_url: http://localhost:11434/v1
   model: gemma4:12b-it-q4_K_M
-  # Ollama takes this switch; it stops reasoning models spending their time on reasoning.
-  reasoning_switch: true
+  # Sends reasoning_effort: none, which Ollama takes. Other servers may reject it with a 400.
+  disable_reasoning: true
   concurrency: 4
 
 # Uncomment to have the trained tagger find errors and judge the LLM's corrections.
