@@ -2,6 +2,7 @@
 
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass, replace
 
 from langcheck.tagging.alignment import CharSpan, preceding_text, split_words, word_spans
 from langcheck.tagging.protocols import GapCommaScorer, SlotScorer
@@ -14,6 +15,15 @@ _ABBREVIATIONS = frozenset(
 )
 """Words whose full stop rarely ends a sentence."""
 _LAST_WORD = re.compile(r"([\w.]+)\.$")
+
+
+@dataclass(frozen=True, slots=True)
+class SentenceInText:
+    """A sentence with words, where it is in its text and the text it is read after."""
+
+    span: CharSpan
+    text: str
+    context: str
 
 
 def _ends_sentence(before: str) -> bool:
@@ -50,6 +60,49 @@ def _trim(text: str, span: CharSpan) -> CharSpan:
     return CharSpan(start, span.start + len(piece.rstrip()))
 
 
+def read_sentences(text: str, context_sentences: int) -> list[SentenceInText]:
+    """The sentences of ``text`` that have words, each with what precedes it."""
+    pieces = [
+        (span, words)
+        for span in sentence_spans(text)
+        if (words := split_words(text[span.start : span.end]))
+    ]
+    contexts = preceding_text([words for _, words in pieces], context_sentences)
+    return [
+        SentenceInText(span, text[span.start : span.end], context)
+        for (span, _), context in zip(pieces, contexts, strict=True)
+    ]
+
+
+def flag_sentences(
+    texts: Sequence[str],
+    contexts: Sequence[str],
+    scorer: SlotScorer,
+    commas: GapCommaScorer | None,
+    *,
+    policy: TierPolicy,
+) -> list[list[TextFlag]]:
+    """The flags of each of ``texts``, which all have words, read after its context, with
+    offsets into that text. Blocking.
+    """
+    if not texts:
+        return []
+    sentences = [split_words(text) for text in texts]
+    scores = scorer.score(sentences, contexts=contexts)
+    comma_scores = commas.score(sentences, contexts=contexts) if commas is not None else None
+    flags: list[list[TextFlag]] = []
+    for index, (text, words) in enumerate(zip(texts, sentences, strict=True)):
+        spans = word_spans(text, words)
+        gaps = comma_scores[index] if comma_scores is not None else None
+        flags.append([text_flag(flag, spans) for flag in slot_flags(scores[index], gaps, policy)])
+    return flags
+
+
+def in_text(flag: TextFlag, offset: int) -> TextFlag:
+    """``flag`` of a sentence starting at ``offset``, with offsets into the whole text."""
+    return replace(flag, span=CharSpan(flag.span.start + offset, flag.span.end + offset))
+
+
 def flag_text(
     text: str,
     scorer: SlotScorer,
@@ -59,23 +112,12 @@ def flag_text(
     context_sentences: int,
 ) -> list[TextFlag]:
     """Every flag of ``text``, in order, with offsets into ``text``."""
-    pieces = [
-        (span, words)
-        for span in sentence_spans(text)
-        if (words := split_words(text[span.start : span.end]))
+    sentences = read_sentences(text, context_sentences)
+    flagged = flag_sentences(
+        [s.text for s in sentences], [s.context for s in sentences], scorer, commas, policy=policy
+    )
+    return [
+        in_text(flag, sentence.span.start)
+        for sentence, flags in zip(sentences, flagged, strict=True)
+        for flag in flags
     ]
-    if not pieces:
-        return []
-    sentences: Sequence[tuple[str, ...]] = [words for _, words in pieces]
-    contexts = preceding_text(sentences, context_sentences)
-    scores = scorer.score(sentences, contexts=contexts)
-    comma_scores = commas.score(sentences, contexts=contexts) if commas is not None else None
-    flags: list[TextFlag] = []
-    for index, (span, words) in enumerate(pieces):
-        shifted = [
-            CharSpan(word.start + span.start, word.end + span.start)
-            for word in word_spans(text[span.start : span.end], words)
-        ]
-        gaps = comma_scores[index] if comma_scores is not None else None
-        flags += [text_flag(flag, shifted) for flag in slot_flags(scores[index], gaps, policy)]
-    return flags

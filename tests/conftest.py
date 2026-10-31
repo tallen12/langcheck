@@ -13,6 +13,7 @@ from langcheck.evaluation.m2 import GoldEdit
 from langcheck.evaluation.models import ScoredEdit
 from langcheck.llm.models import ChatMessage, ChatOptions, LLMError
 from langcheck.scoring.models import ScoredText
+from langcheck.tagging.models import SlotScores
 from langcheck.taxonomy.kinds import ErrorKind
 
 type Responder = Callable[[Sequence[ChatMessage]], str | LLMError]
@@ -272,3 +273,26 @@ class TokenDiffAnnotator:
             else:
                 edits.append(ScoredEdit(i1, i2, tuple(target[j1:j2]), self.kind))
         return edits
+
+
+class WordTableTagger:
+    """A ``SlotScorer`` fake scoring words from a table and gaps as nothing, like a tagger
+    that knows exactly which words are wrong. Records how many batches it was given.
+    """
+
+    def __init__(self, table: dict[str, float]) -> None:
+        self._table = table
+        self.batches: list[list[Sequence[str]]] = []
+
+    def score(
+        self, sentences: Sequence[Sequence[str]], *, contexts: Sequence[str] | None = None
+    ) -> list[SlotScores]:
+        """A word's table entry, or 0."""
+        self.batches.append(list(sentences))
+        return [
+            SlotScores(
+                tuple(self._table.get(word, 0.0) for word in sentence),
+                (0.0,) * (len(sentence) + 1),
+            )
+            for sentence in sentences
+        ]
