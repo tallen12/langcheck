@@ -52,7 +52,7 @@ class CorrectionPolicy:
     the tagger would reward cutting a sentence down.
     """
 
-    count: int = 3
+    count: int = 2
     min_reduction: float = 0.1
     confident_reduction: float = 0.6
     edit: ValidationPolicy = field(default_factory=ValidationPolicy)

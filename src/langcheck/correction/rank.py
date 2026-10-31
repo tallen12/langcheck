@@ -20,7 +20,7 @@ from langcheck.correction.models import (
 from langcheck.correction.place import corrected_sentence, touches
 from langcheck.tagging.alignment import CharSpan
 from langcheck.tagging.document import flag_sentences, in_text
-from langcheck.tagging.protocols import GapCommaScorer, SlotScorer
+from langcheck.tagging.protocols import SentenceReader
 from langcheck.tagging.tiers import TextFlag, Tier, TierPolicy
 
 
@@ -77,8 +77,7 @@ def _judge(
 
 def rank_corrections(
     pending: Sequence[Pending],
-    scorer: SlotScorer,
-    commas: GapCommaScorer | None,
+    reader: SentenceReader,
     *,
     tiers: TierPolicy,
     policy: CorrectionPolicy,
@@ -90,8 +89,7 @@ def rank_corrections(
     flagged_after = flag_sentences(
         [corrected_sentence(item.flagged.sentence, candidate) for item, candidate in placed],
         [item.flagged.sentence.context for item, _ in placed],
-        scorer,
-        commas,
+        reader,
         policy=tiers,
     )
     verdicts = iter(

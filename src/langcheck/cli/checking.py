@@ -16,8 +16,9 @@ from langcheck.check.checker import Checker
 from langcheck.check.memory_cache import MemoryResultCache
 from langcheck.check.protocols import TextChecker
 from langcheck.check.resolve import ValidationPolicy
-from langcheck.context.builder import ContextBuilder
+from langcheck.context.builder import ContextBuilder, NoContext
 from langcheck.context.models import DocumentContext
+from langcheck.context.protocols import ContextSource
 from langcheck.correction.checker import TaggerLoader, open_correction_checker
 from langcheck.llm.async_openai_chat import AsyncOpenAIChatClient
 from langcheck.llm.models import ChatOptions
@@ -40,10 +41,11 @@ class LocalChecker:
 
     checker: TextChecker
     contexts: ContextBuilder
+    check_contexts: ContextSource
 
     async def check(self, text: str) -> CheckResponse:
         """Build the context (or go without it) and check ``text``."""
-        built = await self.contexts.build(text)
+        built = await self.check_contexts.build(text)
         context = built if isinstance(built, DocumentContext) else DocumentContext.empty()
         result = await self.checker.check(text, user=LOCAL_USER, context=context)
         return CheckResponse.of(result, context)
@@ -92,11 +94,14 @@ async def open_local(
                 model=settings.llm.model,
                 load=load_tagger,
             )
+        contexts = ContextBuilder(
+            llm, options=options, max_paragraphs=settings.checker.context_max_paragraphs
+        )
         yield LocalChecker(
             checker=checker,
-            contexts=ContextBuilder(
-                llm, options=options, max_paragraphs=settings.checker.context_max_paragraphs
-            ),
+            contexts=contexts,
+            # The correction checker reads no context, so it need not ask the LLM for one.
+            check_contexts=NoContext() if settings.correction.checkpoint is not None else contexts,
         )
 
 

@@ -15,6 +15,7 @@ from langcheck.llm.models import ChatOptions, LLMError
 from langcheck.tagging.loaded import Trained
 from langcheck.tagging.models import SlotScores
 from langcheck.tagging.protocols import SlotScorer
+from langcheck.tagging.reading import PairedReader
 from langcheck.tagging.tiers import TierPolicy
 from langcheck.taxonomy.kinds import ErrorKind
 from tests.conftest import Responder, ScriptedLLM, WordTableTagger
@@ -63,8 +64,7 @@ def checker(
 ) -> CorrectionChecker:
     pipeline = CorrectionPipeline(
         llm=llm,
-        scorer=scorer if scorer is not None else WordTableTagger(table),
-        commas=None,
+        reader=PairedReader(scorer if scorer is not None else WordTableTagger(table)),
         tiers=TierPolicy(),
         policy=CorrectionPolicy(),
         options=ChatOptions(),

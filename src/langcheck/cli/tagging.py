@@ -362,8 +362,7 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
             trained = runtime.load(checkpoint, device=device)
             flags = flag_text(
                 text,
-                trained.scorer,
-                trained.commas,
+                trained.reader,
                 policy=TierPolicy(error=error, suggestion=suggestion),
                 context_sentences=trained.context_sentences,
             )

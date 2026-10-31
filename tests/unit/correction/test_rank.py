@@ -10,6 +10,7 @@ from langcheck.correction.models import (
 from langcheck.correction.rank import rank_corrections, sentence_score
 from langcheck.tagging.alignment import CharSpan
 from langcheck.tagging.document import SentenceInText
+from langcheck.tagging.reading import PairedReader
 from langcheck.tagging.tiers import FlagKind, TextFlag, Tier, TierPolicy
 from langcheck.taxonomy.kinds import ErrorKind, Operation
 from tests.conftest import WordTableTagger
@@ -31,7 +32,7 @@ def judge(
 ) -> Corrected:
     pending = Pending(FlaggedSentence(SENTENCE, flags), GO, candidates, ())
     [corrected] = rank_corrections(
-        [pending], WordTableTagger(table), None, tiers=TIERS, policy=CorrectionPolicy()
+        [pending], PairedReader(WordTableTagger(table)), tiers=TIERS, policy=CorrectionPolicy()
     )
     return corrected
 
@@ -109,7 +110,9 @@ def test_rejections_from_placing_are_kept_and_the_batch_is_one_call() -> None:
         Pending(FlaggedSentence(SENTENCE, (GO,)), GO, (), ()),
     ]
 
-    corrected = rank_corrections(pendings, tagger, None, tiers=TIERS, policy=CorrectionPolicy())
+    corrected = rank_corrections(
+        pendings, PairedReader(tagger), tiers=TIERS, policy=CorrectionPolicy()
+    )
 
     assert [len(c.ranked) for c in corrected] == [1, 1, 0]
     assert len(tagger.batches) == 1
@@ -119,6 +122,6 @@ def test_nothing_to_judge_does_not_call_the_tagger() -> None:
     tagger = WordTableTagger({})
     pending = Pending(FlaggedSentence(SENTENCE, (GO,)), GO, (), ())
 
-    rank_corrections([pending], tagger, None, tiers=TIERS, policy=CorrectionPolicy())
+    rank_corrections([pending], PairedReader(tagger), tiers=TIERS, policy=CorrectionPolicy())
 
     assert tagger.batches == []

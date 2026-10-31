@@ -19,7 +19,7 @@ from langcheck.llm.models import ChatOptions
 from langcheck.llm.protocols import AsyncLLMClient
 from langcheck.llm.structured import Failed, Parsed, complete_structured
 from langcheck.tagging.document import SentenceInText, flag_sentences, in_text, read_sentences
-from langcheck.tagging.protocols import GapCommaScorer, SlotScorer
+from langcheck.tagging.protocols import SentenceReader
 from langcheck.tagging.tiers import TierPolicy
 
 
@@ -31,8 +31,7 @@ class CorrectionPipeline:
     """
 
     llm: AsyncLLMClient
-    scorer: SlotScorer
-    commas: GapCommaScorer | None
+    reader: SentenceReader
     tiers: TierPolicy
     policy: CorrectionPolicy
     options: ChatOptions
@@ -51,8 +50,7 @@ class CorrectionPipeline:
             await asyncio.to_thread(
                 rank_corrections,
                 pending,
-                self.scorer,
-                self.commas,
+                self.reader,
                 tiers=self.tiers,
                 policy=self.policy,
             )
@@ -67,8 +65,7 @@ class CorrectionPipeline:
         flagged = flag_sentences(
             [s.text for s in sentences],
             [s.context for s in sentences],
-            self.scorer,
-            self.commas,
+            self.reader,
             policy=self.tiers,
         )
         return [

@@ -31,6 +31,16 @@ class ContextReply(BaseModel):
     notes: str
 
 
+class NoContext:
+    """A ``ContextSource`` for a checker that reads no context: it costs no LLM call."""
+
+    async def build(
+        self, text: str, *, dictionary: Collection[str] = ()
+    ) -> DocumentContext | Failed:
+        """The empty context."""
+        return DocumentContext.empty()
+
+
 class ContextBuilder:
     """Asks the LLM to describe a document, sampling long documents.
 

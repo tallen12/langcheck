@@ -28,6 +28,7 @@ from langcheck.evaluation.examples import Example
 from langcheck.evaluation.models import ScoredEdit
 from langcheck.llm.models import ChatOptions, LLMError
 from langcheck.tagging.alignment import CharSpan
+from langcheck.tagging.reading import PairedReader
 from langcheck.tagging.tiers import FlagKind, TextFlag, Tier, TierPolicy
 from langcheck.taxonomy.kinds import ErrorKind, Operation
 from tests.conftest import Responder, ScriptedLLM, TokenDiffAnnotator, WordTableTagger
@@ -141,8 +142,7 @@ def test_suggest_all_keeps_order_and_logs_progress(
 ) -> None:
     pipeline = CorrectionPipeline(
         llm=scripted_llm([json.dumps({"flags": []})]),
-        scorer=WordTableTagger({"go": 0.9}),
-        commas=None,
+        reader=PairedReader(WordTableTagger({"go": 0.9})),
         tiers=TierPolicy(),
         policy=CorrectionPolicy(),
         options=ChatOptions(),

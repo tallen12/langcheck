@@ -11,6 +11,7 @@ from langcheck.correction.models import (
 )
 from langcheck.correction.pipeline import CorrectionPipeline
 from langcheck.llm.models import ChatMessage, ChatOptions, LLMError
+from langcheck.tagging.reading import PairedReader
 from langcheck.tagging.tiers import TierPolicy
 from tests.conftest import Responder, ScriptedLLM, WordTableTagger
 
@@ -42,10 +43,9 @@ def suggest(
     llm = build(script)
     pipeline = CorrectionPipeline(
         llm=llm,
-        scorer=WordTableTagger(table),
-        commas=None,
+        reader=PairedReader(WordTableTagger(table)),
         tiers=TierPolicy(),
-        policy=CorrectionPolicy(),
+        policy=CorrectionPolicy(count=3),
         options=ChatOptions(),
         context_sentences=1,
     )

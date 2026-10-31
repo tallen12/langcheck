@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
 from langcheck.tagging.alignment import CharSpan, preceding_text, split_words, word_spans
-from langcheck.tagging.protocols import GapCommaScorer, SlotScorer
+from langcheck.tagging.protocols import SentenceReader
 from langcheck.tagging.tiers import TextFlag, TierPolicy, slot_flags, text_flag
 
 _END = re.compile(r"[.!?]+[\"'\u2019\u201d)\]]*\s+|\n\s*")
@@ -77,8 +77,7 @@ def read_sentences(text: str, context_sentences: int) -> list[SentenceInText]:
 def flag_sentences(
     texts: Sequence[str],
     contexts: Sequence[str],
-    scorer: SlotScorer,
-    commas: GapCommaScorer | None,
+    reader: SentenceReader,
     *,
     policy: TierPolicy,
 ) -> list[list[TextFlag]]:
@@ -88,13 +87,12 @@ def flag_sentences(
     if not texts:
         return []
     sentences = [split_words(text) for text in texts]
-    scores = scorer.score(sentences, contexts=contexts)
-    comma_scores = commas.score(sentences, contexts=contexts) if commas is not None else None
+    readings = reader.read(sentences, contexts=contexts)
     flags: list[list[TextFlag]] = []
-    for index, (text, words) in enumerate(zip(texts, sentences, strict=True)):
+    for text, words, reading in zip(texts, sentences, readings, strict=True):
         spans = word_spans(text, words)
-        gaps = comma_scores[index] if comma_scores is not None else None
-        flags.append([text_flag(flag, spans) for flag in slot_flags(scores[index], gaps, policy)])
+        found = slot_flags(reading.scores, reading.commas, policy)
+        flags.append([text_flag(flag, spans) for flag in found])
     return flags
 
 
@@ -105,8 +103,7 @@ def in_text(flag: TextFlag, offset: int) -> TextFlag:
 
 def flag_text(
     text: str,
-    scorer: SlotScorer,
-    commas: GapCommaScorer | None,
+    reader: SentenceReader,
     *,
     policy: TierPolicy,
     context_sentences: int,
@@ -114,7 +111,7 @@ def flag_text(
     """Every flag of ``text``, in order, with offsets into ``text``."""
     sentences = read_sentences(text, context_sentences)
     flagged = flag_sentences(
-        [s.text for s in sentences], [s.context for s in sentences], scorer, commas, policy=policy
+        [s.text for s in sentences], [s.context for s in sentences], reader, policy=policy
     )
     return [
         in_text(flag, sentence.span.start)

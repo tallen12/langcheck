@@ -39,6 +39,10 @@ class Services:
     limiter: CheckLimiter
     documents: DocumentService
     dictionary: DictionaryStore
+    check_contexts: ContextSource | None = None
+    """The context ``/check`` builds when the client sends none, if not from ``contexts``;
+    ``/context`` always uses ``contexts``.
+    """
 
 
 type ServicesFactory = Callable[[], AbstractAsyncContextManager[Services]]
@@ -118,7 +122,8 @@ async def _check(services: Services, body: CheckRequest, caller: User) -> CheckR
         # A one-shot check builds its context every time, so the stored dictionary stays
         # out of it: in the glossary it would change the context version, and with it
         # every cache key, whenever a word is added or removed.
-        context = await _context_or_empty(services.contexts, body.text, body.dictionary)
+        contexts = services.check_contexts or services.contexts
+        context = await _context_or_empty(contexts, body.text, body.dictionary)
     result = await services.checker.check(
         body.text, user=caller.name, context=context, dictionary=words
     )

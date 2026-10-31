@@ -187,3 +187,37 @@ def test_a_configured_tagger_serves_one_shot_checks_and_documents(tmp_path: Path
         ("gone", "low"),
     ]
     assert body["suggestions"][0]["id"] == suggestion["id"]
+
+
+def test_a_configured_tagger_asks_the_llm_for_no_context_unless_told_to(tmp_path: Path) -> None:
+    settings = load_settings(
+        ServerSettings,
+        overrides={
+            "auth": {"mode": "none"},
+            "database": {"url": f"sqlite:///{tmp_path / 'langcheck.db'}"},
+            "llm": {"base_url": "http://llm.test/v1", "retries": 0},
+            "correction": {"checkpoint": str(tmp_path / "tagger")},
+        },
+        yaml_data={},
+    )
+    calls: list[str] = []
+
+    def counting(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content)["messages"][0]["content"][:30])
+        return fake_llm(request)
+
+    def load(path: Path, *, device: str) -> Trained:
+        return Trained(WordTableTagger({}), 0.5, "base", 0.5)
+
+    app = build_app(
+        lambda: open_services(settings, transport=httpx.MockTransport(counting), load_tagger=load)
+    )
+
+    with TestClient(app) as client:
+        checked = client.post("/check", json={"text": "All fine here."})
+        assert checked.status_code == 200
+        assert calls == []
+        built = client.post("/context", json={"text": "All fine here."})
+
+    assert built.json()["summary"] == "A note."
+    assert len(calls) == 1

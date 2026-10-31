@@ -7,8 +7,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from langcheck.tagging.models import SlotScores
-from langcheck.tagging.protocols import GapCommaScorer, SlotScorer
+from langcheck.tagging.models import SentenceReading, SlotScores
+from langcheck.tagging.protocols import GapCommaScorer, SentenceReader, SlotScorer
+from langcheck.tagging.reading import PairedReader
 
 MAX_VRAM_SHARE = 0.8
 
@@ -24,6 +25,14 @@ class Trained:
     commas: GapCommaScorer | None = None
     context_sentences: int = 0
     """``None`` until ``langcheck tagger train-commas`` has run on the checkpoint."""
+    shared_pass: SentenceReader | None = None
+
+    @property
+    def reader(self) -> SentenceReader:
+        """What flagging reads with: one pass of the model when it has that, or else the
+        scorers one after the other.
+        """
+        return self.shared_pass or PairedReader(self.scorer, self.commas)
 
 
 class OneAtATimeScorer:
@@ -58,6 +67,21 @@ class OneAtATimeCommas:
             return self._scorer.score(sentences, contexts=contexts)
 
 
+class OneAtATimeReader:
+    """A ``SentenceReader`` sharing the same turn."""
+
+    def __init__(self, reader: SentenceReader, lock: threading.Lock) -> None:
+        self._reader = reader
+        self._lock = lock
+
+    def read(
+        self, sentences: Sequence[Sequence[str]], *, contexts: Sequence[str] | None = None
+    ) -> list[SentenceReading]:
+        """The wrapped reader's readings, once no other batch is running. Blocking."""
+        with self._lock:
+            return self._reader.read(sentences, contexts=contexts)
+
+
 def torch_limit(device: object) -> None:
     """Past VRAM the driver spills into system RAM, which can take the desktop down."""
     import torch
@@ -72,7 +96,7 @@ def load_trained(path: Path, *, device: str) -> Trained:
 
     from langcheck.tagging.checkpoint import load_checkpoint
     from langcheck.tagging.comma import CommaScorer, has_comma_head, load_comma_head
-    from langcheck.tagging.inference import TaggerScorer
+    from langcheck.tagging.inference import TaggerReader, TaggerScorer
 
     target = torch.device(device)
     torch_limit(target)
@@ -80,6 +104,7 @@ def load_trained(path: Path, *, device: str) -> Trained:
     length = loaded.info.max_length
     lock = threading.Lock()
     commas = None
+    head = None
     if has_comma_head(path):
         head = load_comma_head(path, loaded.tagger, device=target)
         commas = OneAtATimeCommas(
@@ -95,4 +120,14 @@ def load_trained(path: Path, *, device: str) -> Trained:
         loaded.info.precision_target,
         commas,
         loaded.info.context_sentences,
+        OneAtATimeReader(
+            TaggerReader(
+                loaded.tagger,
+                loaded.tokenizer,
+                device=target,
+                max_length=length,
+                comma_head=head,
+            ),
+            lock,
+        ),
     )

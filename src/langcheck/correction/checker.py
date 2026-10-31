@@ -201,8 +201,7 @@ async def open_correction_checker(
     policy = config.policy()
     pipeline = CorrectionPipeline(
         llm=llm,
-        scorer=trained.scorer,
-        commas=trained.commas,
+        reader=trained.reader,
         tiers=TierPolicy(),
         policy=policy,
         options=ChatOptions(),

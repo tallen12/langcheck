@@ -87,8 +87,7 @@ def suggest_app(
         async with httpx.AsyncClient(transport=env.transport) as http:
             yield CorrectionPipeline(
                 llm=AsyncOpenAIChatClient(http, loaded.llm.client_config()),
-                scorer=trained.scorer,
-                commas=trained.commas,
+                reader=trained.reader,
                 tiers=tiers,
                 policy=policy,
                 options=ChatOptions(),

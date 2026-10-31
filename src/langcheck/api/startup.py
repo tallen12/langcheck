@@ -18,7 +18,7 @@ from langcheck.check.checker import Checker
 from langcheck.check.memory_cache import MemoryResultCache
 from langcheck.check.protocols import TextChecker
 from langcheck.check.resolve import ValidationPolicy
-from langcheck.context.builder import ContextBuilder
+from langcheck.context.builder import ContextBuilder, NoContext
 from langcheck.correction.checker import TaggerLoader, open_correction_checker
 from langcheck.database.schema import open_database
 from langcheck.dictionary.memory_store import MemoryDictionaryStore
@@ -87,6 +87,8 @@ async def open_services(
             contexts = ContextBuilder(
                 llm, options=options, max_paragraphs=settings.checker.context_max_paragraphs
             )
+            # The correction checker reads no context, so checks need not ask the LLM for one.
+            check_contexts = NoContext() if settings.correction.checkpoint is not None else contexts
             limiter = UserLimiter(
                 max_in_flight=settings.limits.in_flight,
                 per_minute=settings.limits.per_minute,
@@ -96,7 +98,7 @@ async def open_services(
             documents = DocumentSessions(
                 MemoryDocumentStore(),
                 checker=checker,
-                contexts=contexts,
+                contexts=check_contexts,
                 splitter=splitter,
                 limiter=limiter,
                 dictionary=dictionary,
@@ -111,6 +113,7 @@ async def open_services(
                     limiter=limiter,
                     documents=documents,
                     dictionary=dictionary,
+                    check_contexts=check_contexts,
                 )
             finally:
                 await documents.aclose()

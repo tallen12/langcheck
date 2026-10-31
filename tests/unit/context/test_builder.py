@@ -7,6 +7,7 @@ from langcheck.context.builder import (
     GAP,
     ContextBuilder,
     ContextReply,
+    NoContext,
     context_messages,
     sample,
 )
@@ -80,3 +81,9 @@ def test_context_messages_hold_the_schema_and_the_document() -> None:
     assert json.dumps(ContextReply.model_json_schema(), indent=2) in system.content
     assert "$schema" not in system.content
     assert (user.role, user.content) == (Role.USER, "Doc.")
+
+
+def test_no_context_is_empty_without_asking_anything() -> None:
+    built = asyncio.run(NoContext().build("Some text.", dictionary=["word"]))
+
+    assert built == DocumentContext.empty()
