@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 from langcheck.evaluation.m2 import AnnotatedSentence
 from langcheck.proposal.protocols import Proposal, ProposalRequest, ProposalSource
+from langcheck.proposal.rerank import RerankPolicy, Scored, reranked
 from langcheck.proposal.targets import WordSpan, flag_span, is_false_alarm, references
 from langcheck.tagging.alignment import preceding_text, split_words
 from langcheck.tagging.models import SentenceReading
@@ -28,18 +29,6 @@ _SPACE = re.compile(r"\s+")
 def normal(text: str) -> str:
     """``text`` without whitespace, so tokenization differences cannot decide a match."""
     return _SPACE.sub("", text)
-
-
-@dataclass(frozen=True, slots=True)
-class Scored:
-    """A proposal with what the tagger thinks: how much it lowers the summed slot
-    probabilities and how many words it removes from the span.
-    """
-
-    text: str
-    log_probability: float
-    drop: float
-    removed: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,12 +148,8 @@ def gold_spans(
 
 
 def ranked(case: Case, weight: float, penalty: float) -> list[Scored]:
-    """``case``'s proposals under ``log probability + weight * drop - penalty * removed``."""
-    return sorted(
-        case.proposals,
-        key=lambda s: s.log_probability + weight * s.drop - penalty * s.removed,
-        reverse=True,
-    )
+    """``case``'s proposals under the given weight and penalty."""
+    return reranked(case.proposals, RerankPolicy(weight, penalty))
 
 
 def recall_row(

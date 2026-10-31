@@ -685,5 +685,11 @@ second feature that lands after it.
 - **Whole-sentence options vs span options.** The plan scores span replacements inside
   the original sentence. If the LLM often needs several linked edits (agreement across a
   clause), allow an issue to carry a multi-span edit.
+- **Local proposer instead of the LLM.** `correction.proposer` swaps the LLM for a 39 MB
+  decoder on the frozen tagger (`langcheck proposer train`). On the LLM's 500 `bea19-dev`
+  sentences F0.5 rose from 0.359 to 0.395 and gain from 188 to 266, but on 500 WikEd
+  sentences F0.5 fell from 0.338 to 0.190 and gain from -116 to -286: it trained on learner
+  text and does not abstain on false alarms. On CPU it took 2.1 s at p50 and 5.5 s at p90
+  per flagged sentence. Make it abstain before it becomes the default.
 - **Scaling past one process.** Redis or SQL adapters for `DocumentStore` and
   `ResultCache`, and a separate scorer service, when one process is not enough.

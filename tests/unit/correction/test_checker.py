@@ -7,10 +7,17 @@ from langcheck.check.checker import CheckResult
 from langcheck.check.memory_cache import MemoryResultCache
 from langcheck.check.suggestion import Confidence, Scored
 from langcheck.context.models import DocumentContext
-from langcheck.correction.checker import CorrectionChecker, open_correction_checker
+from langcheck.correction.checker import (
+    CorrectionChecker,
+    open_correction_checker,
+    open_proposing_checker,
+)
+from langcheck.correction.llm_corrector import LlmCorrector
 from langcheck.correction.models import CorrectionPolicy
 from langcheck.correction.pipeline import CorrectionPipeline
 from langcheck.llm.models import ChatOptions, LLMError
+from langcheck.proposal.loaded import Proposing
+from langcheck.proposal.protocols import Proposal, ProposalRequest
 from langcheck.tagging.loaded import Trained
 from langcheck.tagging.models import SlotScores
 from langcheck.tagging.protocols import SlotScorer
@@ -62,11 +69,10 @@ def checker(
     llm: ScriptedLLM, table: dict[str, float], *, scorer: SlotScorer | None = None
 ) -> CorrectionChecker:
     pipeline = CorrectionPipeline(
-        llm=llm,
+        corrector=LlmCorrector(llm, CorrectionPolicy(), ChatOptions()),
         reader=PairedReader(scorer if scorer is not None else WordTableTagger(table)),
         tiers=TierPolicy(),
         policy=CorrectionPolicy(),
-        options=ChatOptions(),
         context_sentences=0,
     )
     return CorrectionChecker(pipeline, cache=MemoryResultCache(), model="m", name="t")
@@ -200,3 +206,31 @@ def test_open_loads_the_tagger_with_the_configured_device(
 
     assert seen == [(tmp_path / "tagger", "cpu")]
     assert check(subject, "All fine.").suggestions == ()
+
+
+class OneProposal:
+    def propose(self, requests: Sequence[ProposalRequest]) -> list[list[tuple[Proposal, ...]]]:
+        return [[(Proposal("goes", -0.1),) for _ in r.spans] for r in requests]
+
+
+def test_a_proposing_checker_loads_both_and_needs_no_llm(tmp_path: Path) -> None:
+    seen: list[tuple[Path, Path, str]] = []
+
+    class Config:
+        device = "cpu"
+
+        def policy(self) -> CorrectionPolicy:
+            return CorrectionPolicy()
+
+    def load(tagger: Path, proposer: Path, *, device: str) -> Proposing:
+        seen.append((tagger, proposer, device))
+        trained = Trained(WordTableTagger({"go": 0.9}), 0.5, "base", 0.5)
+        return Proposing(trained, OneProposal())
+
+    subject = asyncio.run(
+        open_proposing_checker(Config(), tmp_path / "t", tmp_path / "p", load=load)
+    )
+
+    assert seen == [(tmp_path / "t", tmp_path / "p", "cpu")]
+    found = check(subject, "He go home.").suggestions
+    assert [option.replacement for s in found for option in s.options] == ["goes"]

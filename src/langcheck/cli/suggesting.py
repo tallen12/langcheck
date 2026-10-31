@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Annotated
 
@@ -11,8 +12,11 @@ from cyclopts import App, Parameter
 
 from langcheck.cli.environment import CliEnvironment
 from langcheck.cli.tagging import DEFAULT_DATA, DEFAULT_POLICY, TaggerRuntime, Trained, render_flag
+from langcheck.correction.checker import ProposerLoader
+from langcheck.correction.llm_corrector import LlmCorrector
 from langcheck.correction.measure import measure, render_measurement, suggest_all
 from langcheck.correction.models import (
+    CandidateOrder,
     Corrected,
     CorrectionPolicy,
     FlagOutcome,
@@ -21,11 +25,14 @@ from langcheck.correction.models import (
     Unavailable,
 )
 from langcheck.correction.pipeline import CorrectionPipeline
+from langcheck.correction.protocols import Corrector
 from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.examples import Example, load_corrected_pairs, load_examples
 from langcheck.evaluation.protocols import EditAnnotator
 from langcheck.llm.async_openai_chat import AsyncOpenAIChatClient
 from langcheck.llm.models import ChatOptions
+from langcheck.proposal.corrector import ProposerCorrector
+from langcheck.proposal.loaded import Proposing, load_proposing
 from langcheck.settings.loading import ClientSettings
 from langcheck.tagging.tiers import TierPolicy
 
@@ -71,7 +78,12 @@ def render_outcome(text: str, outcome: FlagOutcome, *, show_rejected: bool) -> l
 
 
 def suggest_app(
-    env: CliEnvironment, *, runtime: TaggerRuntime, settings: SettingsLoader, guarded: Guard
+    env: CliEnvironment,
+    *,
+    runtime: TaggerRuntime,
+    settings: SettingsLoader,
+    guarded: Guard,
+    load_proposer: ProposerLoader = load_proposing,
 ) -> App:
     """The ``suggest`` command."""
     app = App(
@@ -80,23 +92,38 @@ def suggest_app(
         result_action="return_value",
     )
 
+    def load_models(checkpoint: Path, proposer: Path | None, device: str) -> Trained | Proposing:
+        if proposer is None:
+            return runtime.load(checkpoint, device=device)
+        return load_proposer(checkpoint, proposer, device=device)
+
     @asynccontextmanager
     async def open_pipeline(
-        trained: Trained, loaded: ClientSettings, tiers: TierPolicy, policy: CorrectionPolicy
+        trained: Trained | Proposing,
+        loaded: ClientSettings,
+        tiers: TierPolicy,
+        policy: CorrectionPolicy,
     ) -> AsyncGenerator[CorrectionPipeline]:
         async with httpx.AsyncClient(transport=env.transport) as http:
+            match trained:
+                case Proposing(trained=tagger, source=source):
+                    chosen = replace(policy, order=CandidateOrder.AS_WRITTEN)
+                    corrector: Corrector = ProposerCorrector(source, tagger.reader, chosen)
+                    policy = chosen
+                case Trained() as tagger:
+                    llm = AsyncOpenAIChatClient(http, loaded.llm.client_config())
+                    corrector = LlmCorrector(llm, policy, ChatOptions())
             yield CorrectionPipeline(
-                llm=AsyncOpenAIChatClient(http, loaded.llm.client_config()),
-                reader=trained.reader,
+                corrector=corrector,
+                reader=tagger.reader,
                 tiers=tiers,
                 policy=policy,
-                options=ChatOptions(),
-                context_sentences=trained.context_sentences,
+                context_sentences=tagger.context_sentences,
             )
 
     async def outcomes(
         text: str,
-        trained: Trained,
+        trained: Trained | Proposing,
         loaded: ClientSettings,
         tiers: TierPolicy,
         policy: CorrectionPolicy,
@@ -106,7 +133,7 @@ def suggest_app(
 
     async def outcomes_of_all(
         texts: Sequence[str],
-        trained: Trained,
+        trained: Trained | Proposing,
         loaded: ClientSettings,
         tiers: TierPolicy,
         policy: CorrectionPolicy,
@@ -120,7 +147,7 @@ def suggest_app(
         name: str,
         examples: Sequence[Example],
         annotator: EditAnnotator,
-        trained: Trained,
+        trained: Trained | Proposing,
         loaded: ClientSettings,
         policy: CorrectionPolicy,
         output: Path | None,
@@ -157,6 +184,9 @@ def suggest_app(
         show_rejected: Annotated[
             bool, Parameter(negative=(), help="Also print corrections not offered, and why.")
         ] = False,
+        proposer: Annotated[
+            Path | None, Parameter(help="A trained proposer to use instead of the LLM.")
+        ] = None,
         device: Annotated[str, Parameter(help="PyTorch device, such as cpu or cuda.")] = "cuda",
         config: Annotated[Path | None, Parameter(help="YAML settings file.")] = None,
         llm_url: Annotated[
@@ -168,7 +198,7 @@ def suggest_app(
 
         def run() -> int:
             loaded = settings(config, {"llm.base_url": llm_url, "llm.model": llm_model})
-            trained = runtime.load(checkpoint, device=device)
+            trained = load_models(checkpoint, proposer, device)
             found = asyncio.run(
                 outcomes(
                     text,
@@ -203,6 +233,9 @@ def suggest_app(
         min_reduction: Annotated[
             float, Parameter(help="How much a correction must lower its sentence's score.")
         ] = DEFAULT_CORRECTIONS.min_reduction,
+        proposer: Annotated[
+            Path | None, Parameter(help="A trained proposer to use instead of the LLM.")
+        ] = None,
         device: Annotated[str, Parameter(help="PyTorch device, such as cpu or cuda.")] = "cuda",
         data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
         config: Annotated[Path | None, Parameter(help="YAML settings file.")] = None,
@@ -219,7 +252,7 @@ def suggest_app(
                 env.err(f"langcheck: run `langcheck evaluate fetch {dataset.value}` first")
                 return FAILED
             loaded = settings(config, {"llm.base_url": llm_url, "llm.model": llm_model})
-            trained = runtime.load(checkpoint, device=device)
+            trained = load_models(checkpoint, proposer, device)
             annotator = env.edit_annotators()
             examples = load_examples(dataset, files, annotator, limit=limit)
             policy = CorrectionPolicy(count=count, min_reduction=min_reduction)
@@ -242,6 +275,9 @@ def suggest_app(
         min_reduction: Annotated[
             float, Parameter(help="How much a correction must lower its sentence's score.")
         ] = DEFAULT_CORRECTIONS.min_reduction,
+        proposer: Annotated[
+            Path | None, Parameter(help="A trained proposer to use instead of the LLM.")
+        ] = None,
         device: Annotated[str, Parameter(help="PyTorch device, such as cpu or cuda.")] = "cuda",
         config: Annotated[Path | None, Parameter(help="YAML settings file.")] = None,
         llm_url: Annotated[
@@ -253,7 +289,7 @@ def suggest_app(
 
         def run() -> int:
             loaded = settings(config, {"llm.base_url": llm_url, "llm.model": llm_model})
-            trained = runtime.load(checkpoint, device=device)
+            trained = load_models(checkpoint, proposer, device)
             annotator = env.edit_annotators()
             examples = load_corrected_pairs(file, annotator, limit=limit)
             policy = CorrectionPolicy(count=count, min_reduction=min_reduction)

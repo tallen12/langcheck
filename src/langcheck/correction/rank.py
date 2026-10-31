@@ -10,6 +10,7 @@ from collections.abc import Iterable, Sequence
 
 from langcheck.correction.models import (
     Candidate,
+    CandidateOrder,
     Corrected,
     CorrectionPolicy,
     Pending,
@@ -82,8 +83,8 @@ def rank_corrections(
     tiers: TierPolicy,
     policy: CorrectionPolicy,
 ) -> list[Corrected]:
-    """Each flag's corrections judged by the tagger, in one batch. Ties keep the LLM's
-    order. Blocking.
+    """Each flag's corrections judged by the tagger, in one batch: at most ``policy.count``
+    offered, ties keeping the corrector's order. Blocking.
     """
     placed = [(item, candidate) for item in pending for candidate in item.candidates]
     flagged_after = flag_sentences(
@@ -111,6 +112,7 @@ def rank_corrections(
                     ranked.append(kept)
                 case Rejected() as dropped:
                     rejected.append(dropped)
-        ranked.sort(key=lambda r: r.reduction, reverse=True)
-        results.append(Corrected(item.flag, tuple(ranked), tuple(rejected)))
+        if policy.order is CandidateOrder.REDUCTION:
+            ranked.sort(key=lambda r: r.reduction, reverse=True)
+        results.append(Corrected(item.flag, tuple(ranked[: policy.count]), tuple(rejected)))
     return results

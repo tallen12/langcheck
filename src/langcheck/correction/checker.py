@@ -9,6 +9,7 @@ reported: a suggestion needs an option.
 
 import asyncio
 from collections.abc import Callable, Collection, Iterable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Protocol
 
@@ -20,8 +21,10 @@ from langcheck.check.protocols import ResultCache
 from langcheck.check.resolve import touches_terms
 from langcheck.check.suggestion import Option, Scored, Suggestion, suggestion_id
 from langcheck.context.models import DocumentContext
+from langcheck.correction.llm_corrector import LlmCorrector
 from langcheck.correction.models import (
     Candidate,
+    CandidateOrder,
     Corrected,
     CorrectionPolicy,
     FlagOutcome,
@@ -29,8 +32,11 @@ from langcheck.correction.models import (
 )
 from langcheck.correction.pipeline import CorrectionPipeline
 from langcheck.correction.prompt import PROMPT_VERSION
+from langcheck.correction.protocols import Corrector
 from langcheck.llm.models import ChatOptions
 from langcheck.llm.protocols import AsyncLLMClient
+from langcheck.proposal.corrector import ProposerCorrector
+from langcheck.proposal.loaded import Proposing
 from langcheck.tagging.alignment import CharSpan
 from langcheck.tagging.document import SentenceInText, read_sentences
 from langcheck.tagging.loaded import Trained
@@ -38,6 +44,7 @@ from langcheck.tagging.tiers import TierPolicy
 from langcheck.text.models import Span
 
 type TaggerLoader = Callable[..., Trained]
+type ProposerLoader = Callable[..., Proposing]
 
 
 class CorrectionConfig(Protocol):
@@ -198,16 +205,42 @@ async def open_correction_checker(
     """The checker using the tagger saved at ``checkpoint``, loaded off the event loop."""
     trained = await asyncio.to_thread(load, checkpoint, device=config.device)
     policy = config.policy()
+    return _checker(
+        LlmCorrector(llm, policy, ChatOptions()),
+        trained,
+        policy,
+        name=_name(f"tagger:{checkpoint.name}", policy),
+        model=model,
+    )
+
+
+async def open_proposing_checker(
+    config: CorrectionConfig,
+    checkpoint: Path,
+    proposer: Path,
+    *,
+    load: ProposerLoader,
+) -> CorrectionChecker:
+    """The checker using a tagger and proposer with no LLM, loaded off the event loop."""
+    proposing = await asyncio.to_thread(load, checkpoint, proposer, device=config.device)
+    policy = replace(config.policy(), order=CandidateOrder.AS_WRITTEN)
+    corrector = ProposerCorrector(proposing.source, proposing.trained.reader, policy)
+    name = _name(f"tagger:{checkpoint.name}:proposer:{proposer.name}", policy)
+    return _checker(corrector, proposing.trained, policy, name=name, model=proposer.name)
+
+
+def _name(prefix: str, policy: CorrectionPolicy) -> str:
+    return f"{prefix}:{policy.count}:{policy.min_reduction}:{policy.confident_reduction}"
+
+
+def _checker(
+    corrector: Corrector, trained: Trained, policy: CorrectionPolicy, *, name: str, model: str
+) -> CorrectionChecker:
     pipeline = CorrectionPipeline(
-        llm=llm,
+        corrector=corrector,
         reader=trained.reader,
         tiers=TierPolicy(),
         policy=policy,
-        options=ChatOptions(),
         context_sentences=trained.context_sentences,
-    )
-    name = (
-        f"tagger:{checkpoint.name}:{policy.count}:{policy.min_reduction}"
-        f":{policy.confident_reduction}"
     )
     return CorrectionChecker(pipeline, cache=MemoryResultCache(), model=model, name=name)

@@ -3,7 +3,6 @@ from collections.abc import Sequence
 from langcheck.evaluation.m2 import AnnotatedSentence, GoldEdit
 from langcheck.proposal.measure import (
     Case,
-    Scored,
     build_cases,
     contexts_of,
     flagged_spans,
@@ -14,6 +13,7 @@ from langcheck.proposal.measure import (
     tune,
 )
 from langcheck.proposal.protocols import Proposal, ProposalRequest
+from langcheck.proposal.rerank import Scored
 from langcheck.proposal.targets import WordSpan
 from langcheck.tagging.models import SentenceReading, SlotScores
 from langcheck.tagging.tiers import TierPolicy

@@ -19,7 +19,12 @@ from langcheck.check.memory_cache import MemoryResultCache
 from langcheck.check.protocols import TextChecker
 from langcheck.check.resolve import ValidationPolicy
 from langcheck.context.builder import ContextBuilder, NoContext
-from langcheck.correction.checker import TaggerLoader, open_correction_checker
+from langcheck.correction.checker import (
+    ProposerLoader,
+    TaggerLoader,
+    open_correction_checker,
+    open_proposing_checker,
+)
 from langcheck.database.schema import open_database
 from langcheck.dictionary.memory_store import MemoryDictionaryStore
 from langcheck.dictionary.protocols import DictionaryStore
@@ -30,6 +35,7 @@ from langcheck.documents.sessions import DocumentSessions
 from langcheck.limits.user_limiter import UserLimiter
 from langcheck.llm.async_openai_chat import AsyncOpenAIChatClient
 from langcheck.llm.models import ChatOptions
+from langcheck.proposal.loaded import load_proposing
 from langcheck.scoring.factory import AdapterLoader, load_adapter, open_ranker
 from langcheck.settings.loading import ServerSettings
 from langcheck.settings.models import AuthMode, DictionaryBackend
@@ -50,6 +56,7 @@ async def open_services(
     clock: Callable[[], datetime] = utc_now,
     load: AdapterLoader = load_adapter,
     load_tagger: TaggerLoader = load_trained,
+    load_proposer: ProposerLoader = load_proposing,
 ) -> AsyncGenerator[Services]:
     """Open the LLM client, scorer, database and document sessions for ``settings`` and
     close them afterwards.
@@ -76,11 +83,19 @@ async def open_services(
                 ranker=ranker,
                 max_words=settings.checker.max_words,
             )
-            if settings.correction.checkpoint is not None:
+            checkpoint = settings.correction.checkpoint
+            if checkpoint is not None and settings.correction.proposer is not None:
+                checker = await open_proposing_checker(
+                    settings.correction,
+                    checkpoint,
+                    settings.correction.proposer,
+                    load=load_proposer,
+                )
+            elif checkpoint is not None:
                 checker = await open_correction_checker(
                     llm,
                     settings.correction,
-                    settings.correction.checkpoint,
+                    checkpoint,
                     model=settings.llm.model,
                     load=load_tagger,
                 )

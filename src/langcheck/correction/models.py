@@ -42,6 +42,15 @@ class RejectionReason(StrEnum):
     NO_IMPROVEMENT = "no_improvement"
 
 
+class CandidateOrder(StrEnum):
+    """How offered corrections are ordered."""
+
+    REDUCTION = "reduction"
+    """By how much each lowers the score: the LLM's own order is no better."""
+    AS_WRITTEN = "as-written"
+    """As the corrector put them, when it has already taken the tagger into account."""
+
+
 @dataclass(frozen=True, slots=True)
 class CorrectionPolicy:
     """How many corrections to ask for per flag and what makes one worth offering.
@@ -56,6 +65,7 @@ class CorrectionPolicy:
     min_reduction: float = 0.1
     confident_reduction: float = 0.6
     edit: ValidationPolicy = field(default_factory=ValidationPolicy)
+    order: CandidateOrder = CandidateOrder.REDUCTION
 
     def __post_init__(self) -> None:
         if self.count < 1:
