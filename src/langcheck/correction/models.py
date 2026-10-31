@@ -41,17 +41,29 @@ class RejectionReason(StrEnum):
     NO_IMPROVEMENT = "no_improvement"
 
 
+class Confidence(StrEnum):
+    """How prominently to show an offered correction. A person chooses among corrections,
+    so a weak one is shown less prominently rather than hidden: about half of those between
+    the two thresholds on BEA-2019 dev were still real fixes.
+    """
+
+    HIGH = "high"
+    LOW = "low"
+
+
 @dataclass(frozen=True, slots=True)
 class CorrectionPolicy:
     """How many corrections to ask for per flag and what makes one worth offering.
 
-    ``min_reduction`` is how much a correction must lower its sentence's score. ``edit``
+    ``min_reduction`` is how much a correction must lower its sentence's score to be
+    offered, and ``confident_reduction`` to be offered with high confidence. ``edit``
     limits the size of an edit: deleting words always lowers the score, so without a limit
     the tagger would reward cutting a sentence down.
     """
 
     count: int = 3
     min_reduction: float = 0.1
+    confident_reduction: float = 0.6
     edit: ValidationPolicy = field(default_factory=ValidationPolicy)
 
     def __post_init__(self) -> None:
@@ -59,6 +71,16 @@ class CorrectionPolicy:
             raise ValueError(f"count must be at least 1, got {self.count}")
         if self.min_reduction < 0:
             raise ValueError(f"min_reduction must be non-negative, got {self.min_reduction}")
+        if self.confident_reduction < self.min_reduction:
+            msg = (
+                f"confident_reduction must be at least min_reduction, "
+                f"got {self.confident_reduction} and {self.min_reduction}"
+            )
+            raise ValueError(msg)
+
+    def confidence(self, reduction: float) -> Confidence:
+        """The confidence of an offered correction lowering the score by ``reduction``."""
+        return Confidence.HIGH if reduction >= self.confident_reduction else Confidence.LOW
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,11 +107,14 @@ class Candidate:
 
 @dataclass(frozen=True, slots=True)
 class Ranked:
-    """A correction worth offering, and its sentence's score before and after it."""
+    """A correction worth offering, its sentence's score before and after it, and how
+    prominently to show it.
+    """
 
     candidate: Candidate
     score_before: float
     score_after: float
+    confidence: Confidence
 
     @property
     def reduction(self) -> float:

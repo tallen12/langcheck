@@ -1,5 +1,6 @@
 from langcheck.correction.models import (
     Candidate,
+    Confidence,
     Corrected,
     CorrectionPolicy,
     FlaggedSentence,
@@ -53,6 +54,15 @@ def test_fixing_the_lesser_of_two_errors_still_counts() -> None:
     [ranked] = corrected.ranked
     assert ranked.score_before == 0.9 + 0.8
     assert ranked.score_after == 0.95
+
+
+def test_a_weak_correction_is_offered_with_low_confidence_after_a_strong_one() -> None:
+    corrected = judge({"gone": 0.5}, replace_go("gone"), replace_go("goes"))
+
+    assert [(r.candidate.replacement, r.confidence) for r in corrected.ranked] == [
+        ("goes", Confidence.HIGH),
+        ("gone", Confidence.LOW),
+    ]
 
 
 def test_a_correction_that_barely_helps_is_refused() -> None:

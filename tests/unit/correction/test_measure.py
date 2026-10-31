@@ -14,6 +14,7 @@ from langcheck.correction.measure import (
 )
 from langcheck.correction.models import (
     Candidate,
+    Confidence,
     Corrected,
     CorrectionPolicy,
     FlagOutcome,
@@ -44,7 +45,7 @@ def fix(replacement: str, position: int) -> Candidate:
 
 
 def ranked(replacement: str, position: int, after: float) -> Ranked:
-    return Ranked(fix(replacement, position), 0.9, after)
+    return Ranked(fix(replacement, position), 0.9, after, Confidence.HIGH)
 
 
 def refused(replacement: str, position: int) -> Rejected:

@@ -40,11 +40,12 @@ type Guard = Callable[[Callable[[], int]], int]
 
 
 def render_ranked(place: int, ranked: Ranked) -> str:
-    """One offered correction: its reduction, edit, kind and explanation."""
+    """One offered correction: its reduction, confidence, edit, kind and explanation."""
     candidate = ranked.candidate
     edit = f"{candidate.original!r} -> {candidate.replacement.strip()!r}"
     return (
-        f"  {place}.\t-{ranked.reduction:.3f}\t{edit}\t{candidate.kind.value}"
+        f"  {place}.\t-{ranked.reduction:.3f}\t{ranked.confidence.value}\t{edit}"
+        f"\t{candidate.kind.value}"
         f"\t{candidate.explanation}"
     )
 
@@ -145,6 +146,9 @@ def suggest_app(
         min_reduction: Annotated[
             float, Parameter(help="How much a correction must lower its sentence's score.")
         ] = DEFAULT_CORRECTIONS.min_reduction,
+        confident_reduction: Annotated[
+            float, Parameter(help="How much a correction must lower it for high confidence.")
+        ] = DEFAULT_CORRECTIONS.confident_reduction,
         error: Annotated[float, Parameter(help="Score where the error tier begins.")] = (
             DEFAULT_POLICY.error
         ),
@@ -172,7 +176,11 @@ def suggest_app(
                     trained,
                     loaded,
                     TierPolicy(error=error, suggestion=suggestion),
-                    CorrectionPolicy(count=count, min_reduction=min_reduction),
+                    CorrectionPolicy(
+                        count=count,
+                        min_reduction=min_reduction,
+                        confident_reduction=confident_reduction,
+                    ),
                 )
             )
             for outcome in found:

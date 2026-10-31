@@ -93,7 +93,7 @@ def test_suggest_prints_the_flag_and_its_ranked_corrections(tmp_path: Path) -> N
     assert run(cli, "tagger", "He go home.", "--device", "cpu") == FOUND
 
     assert "3-5\t0.900\terror\tgo" in cli.output
-    assert "1.\t-0.900\t'go' -> 'goes'\tVerbForm\tAgreement." in cli.output
+    assert "1.\t-0.900\thigh\t'go' -> 'goes'\tVerbForm\tAgreement." in cli.output
     assert "no_change" not in cli.output
 
 

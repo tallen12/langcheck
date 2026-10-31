@@ -72,7 +72,7 @@ def _judge(
         reason = RejectionReason.NO_IMPROVEMENT
     if reason is not None:
         return Rejected(candidate.original, candidate.replacement, reason, reduction, candidate)
-    return Ranked(candidate, score_before, score_after)
+    return Ranked(candidate, score_before, score_after, policy.confidence(reduction))
 
 
 def rank_corrections(

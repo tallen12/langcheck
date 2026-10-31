@@ -2,6 +2,7 @@ import pytest
 
 from langcheck.correction.models import (
     Candidate,
+    Confidence,
     CorrectionPolicy,
     FlagType,
     Ranked,
@@ -41,4 +42,16 @@ def test_policy_refuses_a_negative_reduction() -> None:
 def test_reduction_is_the_score_lost() -> None:
     candidate = Candidate(CharSpan(0, 1), "a", "b", ErrorKind.SPELLING, Operation.REPLACEMENT, "")
 
-    assert Ranked(candidate, 1.5, 0.5).reduction == 1.0
+    assert Ranked(candidate, 1.5, 0.5, Confidence.HIGH).reduction == 1.0
+
+
+def test_policy_needs_the_confident_reduction_at_or_above_the_minimum() -> None:
+    with pytest.raises(ValueError, match="confident_reduction"):
+        CorrectionPolicy(min_reduction=0.5, confident_reduction=0.4)
+
+
+def test_confidence_is_high_from_the_confident_reduction_up() -> None:
+    policy = CorrectionPolicy(confident_reduction=0.6)
+
+    assert policy.confidence(0.6) is Confidence.HIGH
+    assert policy.confidence(0.59) is Confidence.LOW
