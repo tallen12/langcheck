@@ -3,8 +3,9 @@ from collections.abc import AsyncIterator, Sequence
 
 from langcheck.api.client import ServiceError
 from langcheck.api.schemas import DocumentBody, OptionBody, SuggestionBody
+from langcheck.check.suggestion import Confidence
 from langcheck.documents.models import CheckState
-from langcheck.lsp.models import CommandAction, Diagnostic, ProxyCommand, ReplaceAction
+from langcheck.lsp.models import CodeAction, CommandAction, Diagnostic, ProxyCommand, ReplaceAction
 from langcheck.lsp.positions import Position, Range
 from langcheck.lsp.protocols import DocumentsService
 from langcheck.lsp.proxy import LspProxy, diagnostics_for
@@ -301,3 +302,51 @@ def test_diagnostics_for_uses_utf16_columns_and_empty_options() -> None:
     assert diagnostic.range == Range(Position(0, 3), Position(0, 6))
     assert diagnostic.message == "'teh': Misspelt."
     assert diagnostic.options == ()
+
+
+def test_low_confidence_reaches_the_diagnostic_and_is_never_the_preferred_fix() -> None:
+    low = typo(5).model_copy(update={"confidence": Confidence.LOW})
+    [diagnostic] = diagnostics_for("Read teh book.", snapshot(1, low))
+
+    assert diagnostic.confidence is Confidence.LOW
+
+    async def run() -> list[CodeAction]:
+        proxy = LspProxy(RecordingForLow(low), publish=_ignore, log=lambda _: None)
+        await proxy.opened(URI, "Read teh book.")
+        for _ in range(50):
+            await asyncio.sleep(0)
+            found = proxy.code_actions(URI, diagnostic.range)
+            if found:
+                return found
+        return []
+
+    first, *_ = asyncio.run(run())
+    assert isinstance(first, ReplaceAction)
+    assert not first.preferred
+
+
+async def _ignore(uri: str, diagnostics: list[Diagnostic]) -> None:
+    return None
+
+
+class RecordingForLow:
+    """A service whose one version has one low-confidence suggestion."""
+
+    def __init__(self, suggestion: SuggestionBody) -> None:
+        self._suggestion = suggestion
+
+    async def put_document(self, uri: str, text: str) -> int:
+        return 1
+
+    async def close_document(self, uri: str) -> bool:
+        return True
+
+    async def dismiss(self, uri: str, suggestion_id: str) -> bool:
+        return True
+
+    async def add_words(self, uri: str, words: Sequence[str]) -> list[str]:
+        return list(words)
+
+    async def events(self, uri: str) -> AsyncIterator[DocumentBody | None]:
+        yield snapshot(1, self._suggestion)
+        await asyncio.Event().wait()

@@ -1,12 +1,14 @@
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import replace
 
 from lsprotocol import types
 from pygls.lsp.server import LanguageServer
 from pygls.workspace import Workspace
 
 from langcheck.api.schemas import DocumentBody
+from langcheck.check.suggestion import Confidence
 from langcheck.lsp.models import CommandAction, Diagnostic, ProxyCommand, ReplaceAction
 from langcheck.lsp.positions import Position, Range
 from langcheck.lsp.proxy import LspProxy
@@ -153,3 +155,9 @@ def test_build_server_registers_the_features_and_commands() -> None:
     ]:
         assert method in features
     assert set(server.protocol.fm.commands) >= {"langcheck.dismiss", "langcheck.addToDictionary"}
+
+
+def test_a_low_confidence_diagnostic_is_only_information() -> None:
+    low = replace(DIAGNOSTIC, confidence=Confidence.LOW)
+
+    assert to_lsp_diagnostic(low).severity is types.DiagnosticSeverity.Information

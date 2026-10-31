@@ -3,6 +3,7 @@ from collections.abc import Sequence
 from langcheck.tagging.alignment import CharSpan
 from langcheck.tagging.document import flag_text, sentence_spans
 from langcheck.tagging.models import SlotScores
+from langcheck.tagging.reading import PairedReader
 from langcheck.tagging.tiers import FlagKind, Tier, TierPolicy
 
 
@@ -73,7 +74,7 @@ TEXT = "I ran home.  We go  there. They go too."
 
 
 def test_flags_point_into_the_whole_text() -> None:
-    flags = flag_text(TEXT, FlagsWord(), None, policy=TierPolicy(), context_sentences=2)
+    flags = flag_text(TEXT, PairedReader(FlagsWord()), policy=TierPolicy(), context_sentences=2)
 
     assert [TEXT[f.span.start : f.span.end] for f in flags] == ["go", "go"]
     assert flags[0].span == CharSpan(16, 18)
@@ -84,7 +85,7 @@ def test_flags_point_into_the_whole_text() -> None:
 def test_each_sentence_reads_the_ones_before_it() -> None:
     scorer, commas = FlagsWord(), NoCommas()
 
-    flag_text(TEXT, scorer, commas, policy=TierPolicy(), context_sentences=1)
+    flag_text(TEXT, PairedReader(scorer, commas), policy=TierPolicy(), context_sentences=1)
 
     assert scorer.sentences[1] == ("We", "go", "there", ".")
     assert scorer.contexts == ["", "I ran home.", "We go there."]
@@ -94,7 +95,7 @@ def test_each_sentence_reads_the_ones_before_it() -> None:
 def test_a_tagger_without_context_reads_none() -> None:
     scorer = FlagsWord()
 
-    flag_text(TEXT, scorer, None, policy=TierPolicy(), context_sentences=0)
+    flag_text(TEXT, PairedReader(scorer), policy=TierPolicy(), context_sentences=0)
 
     assert scorer.contexts == ["", "", ""]
 
@@ -102,5 +103,5 @@ def test_a_tagger_without_context_reads_none() -> None:
 def test_text_without_words_is_not_scored() -> None:
     scorer = FlagsWord()
 
-    assert flag_text("  ", scorer, None, policy=TierPolicy(), context_sentences=2) == []
+    assert flag_text("  ", PairedReader(scorer), policy=TierPolicy(), context_sentences=2) == []
     assert scorer.sentences == []

@@ -17,6 +17,7 @@ from tests.conftest import (
     ScriptedLLM,
     SyncTableScorer,
     TableScorer,
+    WordTableTagger,
 )
 
 HI = [ChatMessage(Role.USER, "hi")]
@@ -116,3 +117,13 @@ def test_token_diff_annotator_diffs_whitespace_tokens() -> None:
         ScoredEdit(1, 1, ("b",), ErrorKind.SPELLING)
     ]
     assert annotator.gold_edits(("a",), [GoldEdit(0, 1, (), "U:X")])[0].kind is ErrorKind.SPELLING
+
+
+def test_word_table_tagger_scores_words_from_its_table() -> None:
+    tagger = WordTableTagger({"go": 0.9})
+
+    [scores] = tagger.score([("He", "go")])
+
+    assert scores.words == (0.0, 0.9)
+    assert scores.gaps == (0.0, 0.0, 0.0)
+    assert tagger.batches == [[("He", "go")]]

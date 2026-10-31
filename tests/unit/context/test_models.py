@@ -7,7 +7,6 @@ def test_empty_context_says_nothing() -> None:
     context = DocumentContext.empty()
 
     assert (context.summary, context.dialect, context.notes) == ("", "", "")
-    assert context.glossary == ()
     assert context.register is Register.NEUTRAL
 
 
@@ -16,7 +15,6 @@ def test_version_is_a_fingerprint_of_the_content() -> None:
 
     assert context.version == DocumentContext.empty().version
     assert len(context.version) == 16
-    assert replace(context, glossary=("Bilbo",)).version != context.version
     assert replace(context, register=Register.FORMAL).version != context.version
 
 

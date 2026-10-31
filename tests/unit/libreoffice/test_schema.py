@@ -51,3 +51,19 @@ def test_parses_a_document_reply_ignoring_unknown_fields() -> None:
 def test_rejects_malformed_replies(data: object) -> None:
     with pytest.raises(SchemaError):
         parse_document(data)
+
+
+def test_a_low_confidence_suggestion_says_so_in_its_comment() -> None:
+    body = {"version": 1, "state": "checked", "suggestions": [{**SUGGESTION, "confidence": "low"}]}
+
+    [suggestion] = parse_document(body).suggestions
+
+    assert suggestion.explanation == "Low confidence. Misspelt."
+
+
+def test_a_high_confidence_suggestion_keeps_its_comment() -> None:
+    body = {"version": 1, "state": "checked", "suggestions": [{**SUGGESTION, "confidence": "high"}]}
+
+    [suggestion] = parse_document(body).suggestions
+
+    assert suggestion.explanation == "Misspelt."

@@ -2,12 +2,11 @@ import asyncio
 import json
 import re
 from collections.abc import Collection, Sequence
-from dataclasses import replace
 
 from langcheck.check.checker import Checker, CheckResult, Unchecked
 from langcheck.check.memory_cache import MemoryResultCache
 from langcheck.check.protocols import OptionRanker
-from langcheck.check.resolve import RejectionReason, ValidationPolicy
+from langcheck.check.resolve import ValidationPolicy
 from langcheck.check.suggestion import Option, Scored
 from langcheck.context.models import DocumentContext
 from langcheck.llm.models import ChatMessage, ChatOptions, LLMError
@@ -118,16 +117,13 @@ def test_the_cache_is_per_user_and_per_model() -> None:
     assert len(llm.chats) == 2
 
 
-def test_dictionary_and_glossary_words_are_never_flagged() -> None:
+def test_dictionary_words_are_never_flagged() -> None:
     llm = ScriptedLLM([proofreader])
-    context = replace(DocumentContext.empty(), glossary=("Bilbo",))
 
-    result = check(make_checker(llm), "Bilbo read teh book.", context=context, dictionary={"teh"})
+    result = check(make_checker(llm), "Read teh book.", dictionary={"teh"})
 
     assert result.suggestions == ()
-    assert {r.reason for r in result.rejections} == {RejectionReason.INTENTIONAL}
     assert [s.original for s in result.filtered] == ["teh"]
-    assert "Glossary (never flag): Bilbo\n" in llm.chats[0][-1].content
 
 
 def test_changing_the_dictionary_reuses_the_cache() -> None:

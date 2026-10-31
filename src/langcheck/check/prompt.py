@@ -1,7 +1,6 @@
 """The chat sent to the LLM for one chunk (prompt version ``check-v1``)."""
 
 import json
-from collections.abc import Collection
 
 from langcheck.check.chunk import Chunk
 from langcheck.check.reply import CheckReply
@@ -10,7 +9,7 @@ from langcheck.llm.models import ChatMessage, Role
 from langcheck.prompts.templates import load_template
 from langcheck.taxonomy.kinds import ErrorKind
 
-PROMPT_VERSION = "check-v1"
+PROMPT_VERSION = "check-v2"
 
 
 def system_prompt() -> str:
@@ -25,36 +24,21 @@ def system_prompt() -> str:
     )
 
 
-def check_messages(
-    chunk: Chunk,
-    context: DocumentContext,
-    *,
-    dictionary: Collection[str] = (),
-) -> list[ChatMessage]:
-    """The system and user messages that ask the model to check ``chunk``.
-
-    ``dictionary`` words are added to the glossary so the model leaves them alone.
-    """
+def check_messages(chunk: Chunk, context: DocumentContext) -> list[ChatMessage]:
+    """The system and user messages that ask the model to check ``chunk``."""
     return [
         ChatMessage(Role.SYSTEM, system_prompt()),
-        ChatMessage(Role.USER, user_prompt(chunk, context, dictionary=dictionary)),
+        ChatMessage(Role.USER, user_prompt(chunk, context)),
     ]
 
 
-def user_prompt(
-    chunk: Chunk,
-    context: DocumentContext,
-    *,
-    dictionary: Collection[str] = (),
-) -> str:
+def user_prompt(chunk: Chunk, context: DocumentContext) -> str:
     """The document context, the read-only neighbours and the numbered focus sentences."""
-    glossary = sorted({*context.glossary, *dictionary})
     sections = [
         "Document context:",
         f"- Summary: {context.summary or 'unknown'}",
         f"- Register: {context.register.value}",
         f"- Dialect: {context.dialect or 'unknown'}",
-        f"- Glossary (never flag): {', '.join(glossary) if glossary else 'none'}",
         f"- Notes: {context.notes or 'none'}",
     ]
     if chunk.before:

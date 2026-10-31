@@ -21,6 +21,7 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, Settings
 from langcheck.settings.models import (
     AuthSettings,
     CheckerSettings,
+    CorrectionSettings,
     DatabaseSettings,
     DictionarySettings,
     HttpSettings,
@@ -89,6 +90,7 @@ class ClientSettings(_LayeredSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     checker: CheckerSettings = Field(default_factory=CheckerSettings)
     scorer: ScorerSettings = Field(default_factory=ScorerSettings)
+    correction: CorrectionSettings = Field(default_factory=CorrectionSettings)
 
 
 class ServerSettings(_LayeredSettings):
@@ -103,6 +105,7 @@ class ServerSettings(_LayeredSettings):
     dictionary: DictionarySettings = Field(default_factory=DictionarySettings)
     checker: CheckerSettings = Field(default_factory=CheckerSettings)
     scorer: ScorerSettings = Field(default_factory=ScorerSettings)
+    correction: CorrectionSettings = Field(default_factory=CorrectionSettings)
     limits: LimitsSettings = Field(default_factory=LimitsSettings)
 
 

@@ -28,6 +28,7 @@ from langcheck.cli.checking import ContextUnavailableError, open_local, open_rem
 from langcheck.cli.environment import CliEnvironment, process_environment
 from langcheck.cli.evaluating import evaluate_app
 from langcheck.cli.render import render_check, render_context
+from langcheck.cli.suggesting import suggest_app
 from langcheck.cli.tagging import TaggerTrainingError, TransformerRuntime, tagger_app
 from langcheck.cli.watching import watch_file
 from langcheck.database.schema import open_database
@@ -127,6 +128,9 @@ def build_app(env: CliEnvironment) -> App:
 
     app.command(evaluate_app(env, settings=client_settings, guarded=guarded))
     app.command(tagger_app(env, runtime=TransformerRuntime(), guarded=guarded))
+    app.command(
+        suggest_app(env, runtime=TransformerRuntime(), settings=client_settings, guarded=guarded)
+    )
 
     @app.command
     def check(

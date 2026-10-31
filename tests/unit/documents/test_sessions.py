@@ -75,13 +75,11 @@ class CountingContexts:
         self.built: list[str] = []
         self.fail = fail
 
-    async def build(
-        self, text: str, *, dictionary: Collection[str] = ()
-    ) -> DocumentContext | Failed:
+    async def build(self, text: str) -> DocumentContext | Failed:
         self.built.append(text)
         if self.fail:
             return Failed("no reply")
-        return DocumentContext(f"build {len(self.built)}", Register.NEUTRAL, "", (), "")
+        return DocumentContext(f"build {len(self.built)}", Register.NEUTRAL, "", "")
 
 
 class Gate:
