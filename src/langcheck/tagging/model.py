@@ -21,6 +21,18 @@ class SlotTagger(torch.nn.Module):
         self.word_head = torch.nn.Linear(2 * size, 1)
         self.gap_head = torch.nn.Linear(2 * size, 1)
 
+    @property
+    def gap_state_size(self) -> int:
+        """The width of each row of :meth:`gap_states`."""
+        return self.gap_head.in_features
+
+    def gap_states(self, batch: Batch) -> torch.Tensor:
+        """What the gap head reads, without dropout, for heads trained on the tagger."""
+        hidden = self.encoder(
+            input_ids=batch.input_ids, attention_mask=batch.attention_mask
+        ).last_hidden_state
+        return torch.cat([_pick(hidden, batch.gap_left), _pick(hidden, batch.gap_right)], dim=-1)
+
     @override
     def forward(  # ty: ignore[invalid-mutable-override]  # torch types forward as an attribute
         self, batch: Batch

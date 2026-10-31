@@ -11,16 +11,21 @@ from langcheck.cli.environment import CliEnvironment
 from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.examples import load_examples
 from langcheck.evaluation.m2 import AnnotatedSentence, read_m2
-from langcheck.tagging.alignment import GapFlag, TextFlag, WordFlag, flag_text
+from langcheck.tagging.alignment import split_words, word_spans
 from langcheck.tagging.metrics import ScoredSentence
-from langcheck.tagging.protocols import SlotScorer
+from langcheck.tagging.protocols import GapCommaScorer, SlotScorer
 from langcheck.tagging.report import build_report, render_report
+from langcheck.tagging.tier_report import TierSentence, measure_tiers, render_tiers
+from langcheck.tagging.tiers import FlagKind, TextFlag, TierPolicy, slot_flags, text_flag
 
 CLEAN = 0
 FAILED = 2
 DEFAULT_DATA = Path("data") / "eval"
 DEFAULT_TRAINING_SETS = (Dataset.BEA19_TRAIN, Dataset.FCE_TRAIN)
 DEFAULT_MODEL = "roberta-large"
+MAX_VRAM_SHARE = 0.8
+
+DEFAULT_POLICY = TierPolicy()
 
 type Guard = Callable[[Callable[[], int]], int]
 
@@ -37,6 +42,8 @@ class Trained:
     threshold: float
     base_model: str
     precision_target: float
+    commas: GapCommaScorer | None = None
+    """``None`` until ``langcheck tagger train-commas`` has run on the checkpoint."""
 
 
 class TaggerRuntime(Protocol):
@@ -59,6 +66,17 @@ class TaggerRuntime(Protocol):
 
     def load(self, path: Path, *, device: str) -> Trained:
         """The tagger saved at ``path``."""
+        ...
+
+    def train_commas(
+        self,
+        path: Path,
+        sentences: Sequence[AnnotatedSentence],
+        *,
+        device: str,
+        log: Callable[[str], None],
+    ) -> None:
+        """Add a comma head, fitted on ``sentences``, to the checkpoint at ``path``."""
         ...
 
 
@@ -118,28 +136,75 @@ class TransformerRuntime:
         import torch
 
         from langcheck.tagging.checkpoint import load_checkpoint
+        from langcheck.tagging.comma import CommaScorer, has_comma_head, load_comma_head
         from langcheck.tagging.inference import TaggerScorer
 
         target = torch.device(device)
+        torch_limit(target)
         loaded = load_checkpoint(path, device=target)
+        length = loaded.info.max_length
+        commas = None
+        if has_comma_head(path):
+            head = load_comma_head(path, loaded.tagger, device=target)
+            commas = CommaScorer(
+                loaded.tagger, head, loaded.tokenizer, device=target, max_length=length
+            )
         return Trained(
-            TaggerScorer(
-                loaded.tagger, loaded.tokenizer, device=target, max_length=loaded.info.max_length
-            ),
+            TaggerScorer(loaded.tagger, loaded.tokenizer, device=target, max_length=length),
             loaded.info.threshold,
             loaded.info.base_model,
             loaded.info.precision_target,
+            commas,
         )
+
+    def train_commas(
+        self,
+        path: Path,
+        sentences: Sequence[AnnotatedSentence],
+        *,
+        device: str,
+        log: Callable[[str], None],
+    ) -> None:
+        """Add a comma head, fitted on ``sentences``, to the checkpoint at ``path``."""
+        import torch
+
+        from langcheck.tagging.checkpoint import load_checkpoint
+        from langcheck.tagging.comma import save_comma_head, train_comma_head
+        from langcheck.tagging.training import split_holdout
+
+        target = torch.device(device)
+        torch_limit(target)
+        loaded = load_checkpoint(path, device=target)
+        training, _ = split_holdout(sentences)
+        head = train_comma_head(
+            loaded.tagger,
+            loaded.tokenizer,
+            training,
+            device=target,
+            max_length=loaded.info.max_length,
+            log=log,
+        )
+        save_comma_head(path, head)
+
+
+def torch_limit(device: object) -> None:
+    """Past VRAM the driver spills into system RAM, which can take the desktop down."""
+    import torch
+
+    if isinstance(device, torch.device) and device.type == "cuda":
+        torch.cuda.set_per_process_memory_fraction(MAX_VRAM_SHARE)
 
 
 def render_flag(text: str, flag: TextFlag) -> str:
-    """One flag as its character offsets and what it is on."""
-    match flag:
-        case WordFlag(span=span, score=score):
-            return f"{span.start}-{span.end}\t{score:.3f}\tword\t{text[span.start : span.end]}"
-        case GapFlag(offset=offset, score=score):
-            before = text[max(0, offset - 12) : offset]
-            return f"{offset}-{offset}\t{score:.3f}\tgap\t{before}^{text[offset : offset + 12]}"
+    """One flag as its character offsets, score, class and what it is on."""
+    span = flag.span
+    name = flag.kind.value if flag.kind is FlagKind.OPTIONAL_COMMA else flag.tier.value
+    if span.start == span.end:
+        before = text[max(0, span.start - 12) : span.start]
+        shown = f"{before}^{text[span.start : span.start + 12]}"
+    else:
+        shown = text[span.start : span.end]
+    return f"{span.start}-{span.end}\t{flag.score:.3f}\t{name}\t{shown}"
 
 
 def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -> App:
@@ -150,6 +215,8 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
         result_action="return_value",
     )
     type DeviceOption = Annotated[str, Parameter(help="PyTorch device, such as cpu or cuda.")]
+    type ErrorOption = Annotated[float, Parameter(help="Score where the error tier begins.")]
+    type SuggestionOption = Annotated[float, Parameter(help="Lowest score shown at all.")]
 
     def data_dir(data: Path | None) -> Path:
         return data if data is not None else env.cwd / DEFAULT_DATA
@@ -231,22 +298,100 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
 
         return guarded(run)
 
+    @app.command(name="train-commas")
+    def train_commas_command(
+        checkpoint: Path,
+        /,
+        *,
+        device: DeviceOption = "cuda",
+        data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
+    ) -> int:
+        """Add a head to CHECKPOINT that tells missing commas from other missing words."""
+
+        def run() -> int:
+            sentences: list[AnnotatedSentence] = []
+            for dataset in DEFAULT_TRAINING_SETS:
+                [path] = dataset_files(dataset, data_dir(data))
+                if not path.is_file():
+                    env.err(f"langcheck: run `langcheck evaluate fetch {dataset.value}` first")
+                    return FAILED
+                sentences += read_m2(path.read_text(encoding="utf-8"))
+            runtime.train_commas(checkpoint, sentences, device=device, log=env.out)
+            env.out(f"saved: {checkpoint}")
+            return CLEAN
+
+        return guarded(run)
+
+    @app.command(name="tiers")
+    def tiers_command(
+        checkpoint: Path,
+        dataset: Dataset,
+        /,
+        *,
+        error: ErrorOption = DEFAULT_POLICY.error,
+        suggestion: SuggestionOption = DEFAULT_POLICY.suggestion,
+        output: Annotated[Path | None, Parameter(help="Also save the report here.")] = None,
+        device: DeviceOption = "cuda",
+        data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
+    ) -> int:
+        """Score the flags a reader would see on DATASET, tier by tier."""
+
+        def run() -> int:
+            files = dataset_files(dataset, data_dir(data))
+            if not all(path.is_file() for path in files):
+                env.err(f"langcheck: run `langcheck evaluate fetch {dataset.value}` first")
+                return FAILED
+            trained = runtime.load(checkpoint, device=device)
+            examples = load_examples(dataset, files, env.edit_annotators())
+            tokens = [example.source for example in examples]
+            scores = trained.scorer.score(tokens)
+            commas = trained.commas.score(tokens) if trained.commas is not None else None
+            report = measure_tiers(
+                [
+                    TierSentence(
+                        score, commas[index] if commas is not None else None, example.annotators
+                    )
+                    for index, (score, example) in enumerate(zip(scores, examples, strict=True))
+                ],
+                dataset=dataset.value,
+                policy=TierPolicy(error=error, suggestion=suggestion),
+            )
+            if output is not None:
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+            env.out(render_tiers(report))
+            return CLEAN
+
+        return guarded(run)
+
     @app.command(name="flag")
     def flag_command(
         checkpoint: Path,
         text: str,
         /,
         *,
-        threshold: Annotated[float | None, Parameter(help="Default: validation's.")] = None,
+        error: ErrorOption = DEFAULT_POLICY.error,
+        suggestion: SuggestionOption = DEFAULT_POLICY.suggestion,
+        hide_commas: Annotated[
+            bool, Parameter(negative=(), help="Leave out optional commas.")
+        ] = False,
         device: DeviceOption = "cuda",
     ) -> int:
-        """Print TEXT's flagged slots as character offsets, score, slot type and text."""
+        """Print TEXT's flags as character offsets, score, class and text."""
 
         def run() -> int:
+            words = split_words(text)
+            if not words:
+                return CLEAN
             trained = runtime.load(checkpoint, device=device)
-            limit = threshold if threshold is not None else trained.threshold
-            for flag in flag_text(text, trained.scorer, threshold=limit):
-                env.out(render_flag(text, flag))
+            [scores] = trained.scorer.score([words])
+            commas = trained.commas.score([words])[0] if trained.commas is not None else None
+            policy = TierPolicy(error=error, suggestion=suggestion)
+            spans = word_spans(text, words)
+            for flag in slot_flags(scores, commas, policy):
+                if hide_commas and flag.kind is FlagKind.OPTIONAL_COMMA:
+                    continue
+                env.out(render_flag(text, text_flag(flag, spans)))
             return CLEAN
 
         return guarded(run)
