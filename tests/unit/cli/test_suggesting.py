@@ -133,6 +133,19 @@ def test_measure_asks_for_a_set_not_yet_fetched(tmp_path: Path) -> None:
     assert "fetch bea19-dev" in "\n".join(cli.err)
 
 
+def test_measure_file_scores_text_and_corrected_lines(tmp_path: Path) -> None:
+    pairs = tmp_path / "pairs.jsonl"
+    pairs.write_text(
+        '{"text": "He go home .", "corrected": "He goes home .", "model": "x"}\n', encoding="utf-8"
+    )
+    cli = Cli(tmp_path)
+
+    assert run(cli, "measure-file", "tagger", str(pairs)) == CLEAN
+
+    assert "pairs: 1 sentences, 1 flags" in cli.output
+    assert "tagger-ranked\t1.000\t1.000\t1.000" in cli.output
+
+
 def test_an_unavailable_flag_says_why() -> None:
     lines = render_outcome("He go home.", Unavailable(FLAG, "LLM error: down"), show_rejected=False)
 

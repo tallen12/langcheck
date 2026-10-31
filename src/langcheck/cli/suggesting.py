@@ -22,7 +22,8 @@ from langcheck.correction.models import (
 )
 from langcheck.correction.pipeline import CorrectionPipeline
 from langcheck.evaluation.datasets import Dataset, dataset_files
-from langcheck.evaluation.examples import load_examples
+from langcheck.evaluation.examples import Example, load_corrected_pairs, load_examples
+from langcheck.evaluation.protocols import EditAnnotator
 from langcheck.llm.async_openai_chat import AsyncOpenAIChatClient
 from langcheck.llm.models import ChatOptions
 from langcheck.settings.loading import ClientSettings
@@ -115,6 +116,23 @@ def suggest_app(
                 pipeline, texts, concurrency=loaded.llm.concurrency, log=env.err
             )
 
+    def report_on(
+        name: str,
+        examples: Sequence[Example],
+        annotator: EditAnnotator,
+        trained: Trained,
+        loaded: ClientSettings,
+        policy: CorrectionPolicy,
+        output: Path | None,
+    ) -> None:
+        texts = [example.text for example in examples]
+        found = asyncio.run(outcomes_of_all(texts, trained, loaded, DEFAULT_POLICY, policy))
+        report = measure(examples, found, annotator, dataset=name)
+        if output is not None:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+        env.out(render_measurement(report))
+
     @app.default
     def suggest(
         checkpoint: Path,
@@ -197,20 +215,42 @@ def suggest_app(
             trained = runtime.load(checkpoint, device=device)
             annotator = env.edit_annotators()
             examples = load_examples(dataset, files, annotator, limit=limit)
-            found = asyncio.run(
-                outcomes_of_all(
-                    [example.text for example in examples],
-                    trained,
-                    loaded,
-                    DEFAULT_POLICY,
-                    CorrectionPolicy(count=count, min_reduction=min_reduction),
-                )
-            )
-            report = measure(examples, found, annotator, dataset=dataset.value)
-            if output is not None:
-                output.parent.mkdir(parents=True, exist_ok=True)
-                output.write_text(report.model_dump_json(indent=2), encoding="utf-8")
-            env.out(render_measurement(report))
+            policy = CorrectionPolicy(count=count, min_reduction=min_reduction)
+            report_on(dataset.value, examples, annotator, trained, loaded, policy, output)
+            return CLEAN
+
+        return guarded(run)
+
+    @app.command(name="measure-file")
+    def measure_file_command(
+        checkpoint: Path,
+        file: Path,
+        /,
+        *,
+        limit: Annotated[int | None, Parameter(help="Only the first N lines.")] = 200,
+        output: Annotated[Path | None, Parameter(help="Also save the report here.")] = None,
+        count: Annotated[int, Parameter(help="Corrections to ask for per flag.")] = (
+            DEFAULT_CORRECTIONS.count
+        ),
+        min_reduction: Annotated[
+            float, Parameter(help="How much a correction must lower its sentence's score.")
+        ] = DEFAULT_CORRECTIONS.min_reduction,
+        device: Annotated[str, Parameter(help="PyTorch device, such as cpu or cuda.")] = "cuda",
+        config: Annotated[Path | None, Parameter(help="YAML settings file.")] = None,
+        llm_url: Annotated[
+            str | None, Parameter(help="Base URL of the OpenAI-compatible API.")
+        ] = None,
+        llm_model: Annotated[str | None, Parameter(help="LLM model name.")] = None,
+    ) -> int:
+        """Like ``measure``, on a JSONL FILE with ``text`` and ``corrected`` on each line."""
+
+        def run() -> int:
+            loaded = settings(config, {"llm.base_url": llm_url, "llm.model": llm_model})
+            trained = runtime.load(checkpoint, device=device)
+            annotator = env.edit_annotators()
+            examples = load_corrected_pairs(file, annotator, limit=limit)
+            policy = CorrectionPolicy(count=count, min_reduction=min_reduction)
+            report_on(file.stem, examples, annotator, trained, loaded, policy, output)
             return CLEAN
 
         return guarded(run)
