@@ -8,7 +8,7 @@ from langcheck.documents.models import CheckState
 from langcheck.lsp.models import CodeAction, CommandAction, Diagnostic, ProxyCommand, ReplaceAction
 from langcheck.lsp.positions import Position, Range
 from langcheck.lsp.protocols import DocumentsService
-from langcheck.lsp.proxy import LspProxy, diagnostics_for
+from langcheck.lsp.proxy import LspProxy, diagnostics_for, moved_diagnostics
 from langcheck.taxonomy.kinds import ErrorKind, Operation
 
 URI = "file:///notes.md"
@@ -260,31 +260,79 @@ def test_code_actions_offer_options_dictionary_and_dismiss() -> None:
     assert service.words == [(URI, ["teh"])]
 
 
-def test_no_quick_fixes_while_the_editor_text_is_ahead_of_the_diagnostics() -> None:
+def test_quick_fixes_follow_the_text_while_an_edit_waits_for_its_check() -> None:
     service, editor = FakeService(), Editor()
     proxy = make(service, editor)
-    on_typo = Range(Position(0, 6), Position(0, 6))
 
-    async def run() -> tuple[int, int, int]:
+    async def run() -> tuple[list[CodeAction], list[CodeAction]]:
         await proxy.opened(URI, "Read teh book.")
         await settle()
         service.push(snapshot(1, typo(5)))
         await settle()
-        before = len(proxy.code_actions(URI, on_typo))
-        # The user types; the new text is not checked yet, so the old ranges are off.
+        # The user types; the service has not answered, so nothing newer is known.
         service.hold.clear()
         await proxy.changed(URI, "Now: Read teh book.")
         await settle()
-        while_typing = len(proxy.code_actions(URI, on_typo))
+        moved = proxy.code_actions(URI, Range(Position(0, 11), Position(0, 11)))
+        old_place = proxy.code_actions(URI, Range(Position(0, 1), Position(0, 1)))
         service.hold.set()
         await settle()
-        service.push(snapshot(2, typo(10)))
-        await settle()
-        after = len(proxy.code_actions(URI, Range(Position(0, 11), Position(0, 11))))
         await proxy.shutdown()
-        return before, while_typing, after
+        return moved, old_place
 
-    assert asyncio.run(run()) == (4, 0, 4)
+    moved, old_place = asyncio.run(run())
+    assert old_place == []
+    replace = moved[0]
+    assert isinstance(replace, ReplaceAction)
+    assert replace.diagnostic.range == Range(Position(0, 10), Position(0, 13))
+    assert editor.published[1][1][0].range == replace.diagnostic.range
+
+
+def test_an_edit_on_a_diagnostic_removes_only_that_diagnostic() -> None:
+    service, editor = FakeService(), Editor()
+    proxy = make(service, editor)
+
+    async def run() -> None:
+        await proxy.opened(URI, "Read teh book, teh end.")
+        await settle()
+        service.push(snapshot(1, typo(5), typo(15)))
+        await settle()
+        service.hold.clear()
+        await proxy.changed(URI, "Read the book, teh end.")
+        await settle()
+        service.hold.set()
+        await settle()
+        await proxy.shutdown()
+
+    asyncio.run(run())
+    [remaining] = editor.published[1][1]
+    assert remaining.range == Range(Position(0, 15), Position(0, 18))
+
+
+def test_a_snapshot_of_older_text_lands_on_the_text_the_editor_has() -> None:
+    service, editor = FakeService(), Editor()
+    proxy = make(service, editor)
+
+    async def run() -> None:
+        await proxy.opened(URI, "Read teh book.")
+        await settle()
+        service.hold.clear()
+        await proxy.changed(URI, "Now: Read teh book.")
+        service.push(snapshot(1, typo(5)))
+        await settle()
+        await proxy.shutdown()
+
+    asyncio.run(run())
+    assert editor.published[0][1][0].range == Range(Position(0, 10), Position(0, 13))
+
+
+def test_moved_diagnostics_handle_new_lines_and_utf16_columns() -> None:
+    before = "😀 Read teh book."
+    [diagnostic] = diagnostics_for(before, snapshot(1, typo(7)))
+
+    [moved] = moved_diagnostics(before, "Title\n😀 Read teh book.", [diagnostic])
+
+    assert moved.range == Range(Position(1, 8), Position(1, 11))
 
 
 def test_closing_an_unknown_document_does_nothing() -> None:

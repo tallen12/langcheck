@@ -35,3 +35,17 @@ def test_ranges_overlap_when_they_share_a_position() -> None:
     assert word.overlaps(Range(Position(1, 6), Position(1, 6)))
     assert word.overlaps(Range(Position(0, 0), Position(1, 4)))
     assert not word.overlaps(Range(Position(1, 9), Position(2, 0)))
+
+
+@pytest.mark.parametrize("offset", [0, 1, 2, 5, 6, 7])
+def test_offset_is_the_inverse_of_position(offset: int) -> None:
+    index = LineIndex("a😀b\ncd\r\n")
+
+    assert index.offset(index.position(offset)) == offset
+
+
+def test_offset_past_the_text_is_clamped() -> None:
+    index = LineIndex("ab\ncd")
+
+    assert index.offset(Position(9, 0)) == 5
+    assert index.offset(Position(0, 9)) == 5
