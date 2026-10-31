@@ -18,7 +18,7 @@ from langcheck.correction.schemas import CorrectionReply, ReplyCorrection
 from langcheck.llm.models import ChatOptions
 from langcheck.llm.protocols import AsyncLLMClient
 from langcheck.llm.structured import Failed, Parsed, complete_structured
-from langcheck.tagging.document import flag_sentences, in_text, read_sentences
+from langcheck.tagging.document import SentenceInText, flag_sentences, in_text, read_sentences
 from langcheck.tagging.protocols import GapCommaScorer, SlotScorer
 from langcheck.tagging.tiers import TierPolicy
 
@@ -40,7 +40,11 @@ class CorrectionPipeline:
 
     async def suggest(self, text: str) -> list[FlagOutcome]:
         """An outcome for every flag of ``text``, in reading order."""
-        flagged = await asyncio.to_thread(self._flag, text)
+        return await self.suggest_sentences(read_sentences(text, self.context_sentences))
+
+    async def suggest_sentences(self, sentences: Sequence[SentenceInText]) -> list[FlagOutcome]:
+        """An outcome for every flag of ``sentences``, in order."""
+        flagged = await asyncio.to_thread(self._flag, sentences)
         answers = await asyncio.gather(*(self._ask(sentence) for sentence in flagged))
         pending = [item for answer in answers for item in answer if isinstance(item, Pending)]
         corrected = iter(
@@ -59,8 +63,7 @@ class CorrectionPipeline:
             for item in answer
         ]
 
-    def _flag(self, text: str) -> list[FlaggedSentence]:
-        sentences = read_sentences(text, self.context_sentences)
+    def _flag(self, sentences: Sequence[SentenceInText]) -> list[FlaggedSentence]:
         flagged = flag_sentences(
             [s.text for s in sentences],
             [s.context for s in sentences],

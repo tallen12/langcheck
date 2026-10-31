@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from langcheck.check.resolve import ValidationPolicy
+from langcheck.check.suggestion import Confidence
 from langcheck.tagging.alignment import CharSpan
 from langcheck.tagging.document import SentenceInText
 from langcheck.tagging.tiers import FlagKind, TextFlag
@@ -39,16 +40,6 @@ class RejectionReason(StrEnum):
     NEW_ERROR = "new_error"
     STILL_FLAGGED = "still_flagged"
     NO_IMPROVEMENT = "no_improvement"
-
-
-class Confidence(StrEnum):
-    """How prominently to show an offered correction. A person chooses among corrections,
-    so a weak one is shown less prominently rather than hidden: about half of those between
-    the two thresholds on BEA-2019 dev were still real fixes.
-    """
-
-    HIGH = "high"
-    LOW = "low"
 
 
 @dataclass(frozen=True, slots=True)

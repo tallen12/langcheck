@@ -8,7 +8,7 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field
 
 from langcheck.check.checker import CheckResult, Unchecked
-from langcheck.check.suggestion import Option, Scored, Suggestion, Unscored
+from langcheck.check.suggestion import Confidence, Option, Scored, Suggestion, Unscored
 from langcheck.context.models import DocumentContext, Register
 from langcheck.documents.events import Snapshot
 from langcheck.documents.models import CheckState
@@ -83,7 +83,8 @@ class ContextRequest(BaseModel):
 
 class OptionBody(BaseModel):
     """One candidate replacement, best first. ``score`` and ``delta`` (how much the
-    candidate sentence improves on the original) are null when no scorer ran.
+    candidate sentence improves on the original) are null when no scorer ran. ``confidence``
+    says how prominently to show it.
     """
 
     model_config = _BODY
@@ -91,19 +92,23 @@ class OptionBody(BaseModel):
     replacement: str
     score: float | None = None
     delta: float | None = None
+    confidence: Confidence = Confidence.HIGH
 
     @classmethod
     def of(cls, option: Option) -> OptionBody:
         """The body for ``option``."""
+        confidence = option.confidence
         match option.rating:
             case Scored(score=score, delta=delta):
-                return cls(replacement=option.replacement, score=score, delta=delta)
+                return cls(
+                    replacement=option.replacement, score=score, delta=delta, confidence=confidence
+                )
             case Unscored():
-                return cls(replacement=option.replacement)
+                return cls(replacement=option.replacement, confidence=confidence)
 
 
 class SuggestionBody(BaseModel):
-    """One suggested fix for ``text[start:end]``."""
+    """One suggested fix for ``text[start:end]``; ``confidence`` is its best option's."""
 
     model_config = _BODY
 
@@ -115,6 +120,7 @@ class SuggestionBody(BaseModel):
     operation: Operation
     explanation: str
     options: list[OptionBody]
+    confidence: Confidence = Confidence.HIGH
 
     @classmethod
     def of(cls, suggestion: Suggestion) -> SuggestionBody:
@@ -128,6 +134,7 @@ class SuggestionBody(BaseModel):
             operation=suggestion.operation,
             explanation=suggestion.explanation,
             options=[OptionBody.of(o) for o in suggestion.options],
+            confidence=suggestion.confidence,
         )
 
 

@@ -14,14 +14,17 @@ from langcheck.api.client import ServiceClient
 from langcheck.api.schemas import CheckResponse, ContextBody
 from langcheck.check.checker import Checker
 from langcheck.check.memory_cache import MemoryResultCache
+from langcheck.check.protocols import TextChecker
 from langcheck.check.resolve import ValidationPolicy
 from langcheck.context.builder import ContextBuilder
 from langcheck.context.models import DocumentContext
+from langcheck.correction.checker import TaggerLoader, open_correction_checker
 from langcheck.llm.async_openai_chat import AsyncOpenAIChatClient
 from langcheck.llm.models import ChatOptions
 from langcheck.llm.structured import Failed
 from langcheck.scoring.factory import AdapterLoader, load_adapter, open_ranker
 from langcheck.settings.loading import ClientSettings
+from langcheck.tagging.loaded import load_trained
 from langcheck.text.regex_splitter import RegexSentenceSplitter
 
 LOCAL_USER = "local"
@@ -35,7 +38,7 @@ class ContextUnavailableError(Exception):
 class LocalChecker:
     """The checker and context builder, running in this process."""
 
-    checker: Checker
+    checker: TextChecker
     contexts: ContextBuilder
 
     async def check(self, text: str) -> CheckResponse:
@@ -60,6 +63,7 @@ async def open_local(
     *,
     transport: httpx.AsyncBaseTransport | None,
     load: AdapterLoader = load_adapter,
+    load_tagger: TaggerLoader = load_trained,
 ) -> AsyncGenerator[LocalChecker]:
     """A checker that talks to the LLM directly (and loads the configured scorer), open
     for the duration of the block.
@@ -70,17 +74,26 @@ async def open_local(
     ):
         llm = AsyncOpenAIChatClient(http, settings.llm.client_config())
         options = ChatOptions()
-        yield LocalChecker(
-            checker=Checker(
+        checker: TextChecker = Checker(
+            llm,
+            splitter=RegexSentenceSplitter(),
+            cache=MemoryResultCache(),
+            model=settings.llm.model,
+            options=options,
+            policy=ValidationPolicy(),
+            ranker=ranker,
+            max_words=settings.checker.max_words,
+        )
+        if settings.correction.checkpoint is not None:
+            checker = await open_correction_checker(
                 llm,
-                splitter=RegexSentenceSplitter(),
-                cache=MemoryResultCache(),
+                settings.correction,
+                settings.correction.checkpoint,
                 model=settings.llm.model,
-                options=options,
-                policy=ValidationPolicy(),
-                ranker=ranker,
-                max_words=settings.checker.max_words,
-            ),
+                load=load_tagger,
+            )
+        yield LocalChecker(
+            checker=checker,
             contexts=ContextBuilder(
                 llm, options=options, max_paragraphs=settings.checker.context_max_paragraphs
             ),
