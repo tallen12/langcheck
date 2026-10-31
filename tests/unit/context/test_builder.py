@@ -21,7 +21,6 @@ REPLY = json.dumps(
         "summary": " A hobbit story. ",
         "register": "fiction-dialogue-heavy",
         "dialect": "en-GB",
-        "glossary": ["Bilbo", " Shire ", " "],
         "notes": "Past tense.",
     }
 )
@@ -29,10 +28,10 @@ REPLY = json.dumps(
 
 def build(llm: ScriptedLLM, text: str = "Bilbo left.") -> DocumentContext | Failed:
     builder = ContextBuilder(llm, options=ChatOptions(), max_paragraphs=3)
-    return asyncio.run(builder.build(text, dictionary=["Gandalf", "Bilbo"]))
+    return asyncio.run(builder.build(text))
 
 
-def test_builds_the_context_and_adds_dictionary_words() -> None:
+def test_builds_the_context() -> None:
     llm = ScriptedLLM([REPLY])
 
     context = build(llm)
@@ -41,7 +40,6 @@ def test_builds_the_context_and_adds_dictionary_words() -> None:
         summary="A hobbit story.",
         register=Register.FICTION_DIALOGUE,
         dialect="en-GB",
-        glossary=("Bilbo", "Shire", "Gandalf"),
         notes="Past tense.",
     )
     assert llm.chats[0][1].content == "Bilbo left."
@@ -84,6 +82,6 @@ def test_context_messages_hold_the_schema_and_the_document() -> None:
 
 
 def test_no_context_is_empty_without_asking_anything() -> None:
-    built = asyncio.run(NoContext().build("Some text.", dictionary=["word"]))
+    built = asyncio.run(NoContext().build("Some text."))
 
     assert built == DocumentContext.empty()

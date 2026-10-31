@@ -7,7 +7,7 @@ from langcheck.context.models import DocumentContext, Register
 
 
 def test_context_body_round_trips_and_uses_the_register_key() -> None:
-    context = DocumentContext("S", Register.FICTION_DIALOGUE, "en-GB", ("Bilbo",), "n")
+    context = DocumentContext("S", Register.FICTION_DIALOGUE, "en-GB", "n")
 
     body = ContextBody.of(context)
 

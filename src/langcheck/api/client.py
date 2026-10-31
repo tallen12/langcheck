@@ -41,9 +41,9 @@ class ServiceClient:
         body = CheckRequest(text=text, dictionary=list(dictionary), uri=uri)
         return await self._send("POST", "check", body, CheckResponse)
 
-    async def context(self, text: str, *, dictionary: Sequence[str] = ()) -> ContextBody:
+    async def context(self, text: str) -> ContextBody:
         """The document context of ``text``."""
-        body = ContextRequest(text=text, dictionary=list(dictionary))
+        body = ContextRequest(text=text)
         return await self._send("POST", "context", body, ContextBody)
 
     async def words(self, uri: str) -> list[str]:

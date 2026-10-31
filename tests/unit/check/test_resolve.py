@@ -107,31 +107,27 @@ def test_size_exempt_kinds_allow_large_reorderings() -> None:
     assert resolve(CheckReply(issues=[reorder]), SENTENCES, policy=POLICY).suggestions
 
 
-def test_rejects_issues_on_intentional_terms_and_dismissed_spans() -> None:
-    name = issue("Bilbo", ["Bill"], sentence="S1")
+def test_rejects_issues_on_dismissed_spans() -> None:
     typo = issue("teh", ["the"])
-    reply = CheckReply(issues=[name, typo])
+    reply = CheckReply(issues=[typo])
     typo_start = TEXT.index("teh")
 
     resolution = resolve(
         reply,
         SENTENCES,
         policy=POLICY,
-        intentional={"Bilbo"},
         dismissed={Span(typo_start, typo_start + 1)},
     )
 
     assert resolution.suggestions == ()
-    assert [r.reason for r in resolution.rejections] == [
-        RejectionReason.INTENTIONAL,
-        RejectionReason.DISMISSED,
-    ]
+    assert [r.reason for r in resolution.rejections] == [RejectionReason.DISMISSED]
 
 
-def test_intentional_terms_match_whole_words_only() -> None:
-    reply = CheckReply(issues=[issue("teh", ["the"])])
+def test_terms_match_whole_words_only() -> None:
+    span = Span(TEXT.index("teh"), TEXT.index("teh") + 3)
 
-    assert resolve(reply, SENTENCES, policy=POLICY, intentional={"te"}).suggestions
+    assert touches_terms(TEXT, span, {"teh"})
+    assert not touches_terms(TEXT, span, {"te"})
 
 
 def test_overlapping_issues_keep_the_first() -> None:

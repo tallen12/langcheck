@@ -8,7 +8,7 @@ import pytest
 from langcheck.api.client import ServiceClient, ServiceError, parse_sse
 from langcheck.api.schemas import CheckResponse, ContextBody, DocumentBody
 
-CONTEXT = {"summary": "", "register": "neutral", "dialect": "", "glossary": [], "notes": ""}
+CONTEXT = {"summary": "", "register": "neutral", "dialect": "", "notes": ""}
 
 
 def client_for(handler: httpx.MockTransport) -> ServiceClient:

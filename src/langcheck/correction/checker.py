@@ -57,9 +57,8 @@ class CorrectionChecker:
     """Checks texts with the pipeline, sending only sentences the cache does not know.
 
     ``name`` identifies the tagger and policy in cache keys, so changing either never
-    reuses old results. The document context plays no part: the LLM that builds it lists
-    the text's errors in its glossary as if they were intended, which would drop the very
-    corrections this finds. Only the user's own dictionary is trusted, after the cache.
+    reuses old results. The document context plays no part. The user's dictionary filters
+    suggestions after the cache.
     """
 
     def __init__(

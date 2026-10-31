@@ -1,7 +1,7 @@
 """Building a :class:`DocumentContext` with one LLM call over the document."""
 
 import json
-from collections.abc import Collection, Sequence
+from collections.abc import Sequence
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,7 +13,7 @@ from langcheck.llm.structured import Failed, Parsed, complete_structured
 from langcheck.prompts.templates import load_template
 from langcheck.text.segment import paragraph_spans
 
-CONTEXT_PROMPT_VERSION = "context-v1"
+CONTEXT_PROMPT_VERSION = "context-v2"
 DEFAULT_MAX_PARAGRAPHS = 30
 GAP = "[...]"
 
@@ -27,16 +27,13 @@ class ContextReply(BaseModel):
     # Aliased because ``register`` would shadow ``BaseModel.register``.
     writing_register: Annotated[Register, Field(alias="register")]
     dialect: str
-    glossary: Annotated[list[str], Field(max_length=200)]
     notes: str
 
 
 class NoContext:
     """A ``ContextSource`` for a checker that reads no context: it costs no LLM call."""
 
-    async def build(
-        self, text: str, *, dictionary: Collection[str] = ()
-    ) -> DocumentContext | Failed:
+    async def build(self, text: str) -> DocumentContext | Failed:
         """The empty context."""
         return DocumentContext.empty()
 
@@ -62,10 +59,8 @@ class ContextBuilder:
         self._options = options
         self._max_paragraphs = max_paragraphs
 
-    async def build(
-        self, text: str, *, dictionary: Collection[str] = ()
-    ) -> DocumentContext | Failed:
-        """The context of ``text``; ``dictionary`` words always join the glossary.
+    async def build(self, text: str) -> DocumentContext | Failed:
+        """The context of ``text``.
 
         Returns ``Failed`` when the LLM gives no valid reply; callers fall back to
         :meth:`DocumentContext.empty`.
@@ -73,13 +68,10 @@ class ContextBuilder:
         messages = context_messages(sample(text, max_paragraphs=self._max_paragraphs))
         match await complete_structured(self._llm, messages, ContextReply, options=self._options):
             case Parsed(value=reply):
-                terms = (t.strip() for t in [*reply.glossary, *sorted(dictionary)])
-                glossary = dict.fromkeys(terms)
                 return DocumentContext(
                     summary=reply.summary.strip(),
                     register=reply.writing_register,
                     dialect=reply.dialect.strip(),
-                    glossary=tuple(term for term in glossary if term),
                     notes=reply.notes.strip(),
                 )
             case Failed() as failed:

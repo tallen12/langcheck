@@ -45,7 +45,6 @@ def render_context(context: ContextBody) -> str:
         ("summary", context.summary),
         ("register", context.writing_register.value),
         ("dialect", context.dialect),
-        ("glossary", ", ".join(context.glossary)),
         ("notes", context.notes),
     ]
     return "\n".join(f"{label}: {value}" for label, value in rows)

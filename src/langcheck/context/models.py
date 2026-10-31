@@ -1,4 +1,4 @@
-"""The document context sent with every chunk: what the text is and what not to flag."""
+"""The document context sent with every chunk: what the text is."""
 
 import hashlib
 import json
@@ -17,16 +17,11 @@ class Register(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class DocumentContext:
-    """A short summary of a whole document, built once and sent with every chunk.
-
-    ``glossary`` holds names, product terms, invented words and intentional nonstandard
-    spellings that must not be flagged.
-    """
+    """A short summary of a whole document, built once and sent with every chunk."""
 
     summary: str
     register: Register
     dialect: str
-    glossary: tuple[str, ...]
     notes: str
 
     @property
@@ -36,7 +31,7 @@ class DocumentContext:
         Equal contexts share it, so results made with a different context are never
         reused, while a rebuilt but unchanged context keeps its cache.
         """
-        fields = [self.summary, self.register.value, self.dialect, self.glossary, self.notes]
+        fields = [self.summary, self.register.value, self.dialect, self.notes]
         encoded = json.dumps(fields, ensure_ascii=False).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()[:16]
 
@@ -47,6 +42,5 @@ class DocumentContext:
             summary="",
             register=Register.NEUTRAL,
             dialect="",
-            glossary=(),
             notes="",
         )

@@ -41,7 +41,6 @@ def fake_llm(request: httpx.Request) -> httpx.Response:
                 "summary": "A note.",
                 "register": "neutral",
                 "dialect": "en-US",
-                "glossary": [],
                 "notes": "",
             }
         )

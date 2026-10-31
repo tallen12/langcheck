@@ -34,7 +34,6 @@ class ContextBody(BaseModel):
     # Aliased because ``register`` would shadow ``BaseModel.register``.
     writing_register: Annotated[Register, Field(alias="register")]
     dialect: str
-    glossary: list[str]
     notes: str
 
     @classmethod
@@ -44,7 +43,6 @@ class ContextBody(BaseModel):
             summary=context.summary,
             register=context.register,
             dialect=context.dialect,
-            glossary=list(context.glossary),
             notes=context.notes,
         )
 
@@ -54,7 +52,6 @@ class ContextBody(BaseModel):
             summary=self.summary,
             register=self.writing_register,
             dialect=self.dialect,
-            glossary=tuple(self.glossary),
             notes=self.notes,
         )
 
@@ -78,7 +75,6 @@ class ContextRequest(BaseModel):
     model_config = _BODY
 
     text: Text
-    dictionary: Words = []
 
 
 class OptionBody(BaseModel):

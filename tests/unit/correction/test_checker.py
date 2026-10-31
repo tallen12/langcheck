@@ -1,7 +1,6 @@
 import asyncio
 import json
 from collections.abc import Callable, Sequence
-from dataclasses import replace
 from pathlib import Path
 
 from langcheck.check.checker import CheckResult
@@ -145,15 +144,6 @@ def test_an_unchanged_sentence_is_not_sent_again_even_when_it_moved(scripted_llm
 
     assert len(llm.chats) == 1
     assert suggestion.span.start == 13
-
-
-def test_a_glossary_listing_an_error_does_not_hide_its_correction(scripted_llm: Build) -> None:
-    subject = checker(scripted_llm([reply(("", "goes"))]), {"go": 0.9})
-    context = replace(EMPTY, glossary=("go",))
-
-    result = asyncio.run(subject.check("He go home.", user="u", context=context))
-
-    assert len(result.suggestions) == 1
 
 
 def test_dictionary_words_are_dropped_after_the_cache(scripted_llm: Build) -> None:

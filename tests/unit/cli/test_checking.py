@@ -43,7 +43,7 @@ def test_remote_client_sends_the_api_key() -> None:
         seen.append(request)
         return httpx.Response(
             200,
-            json={"summary": "", "register": "neutral", "dialect": "", "glossary": [], "notes": ""},
+            json={"summary": "", "register": "neutral", "dialect": "", "notes": ""},
         )
 
     async def run() -> None:
@@ -56,7 +56,7 @@ def test_remote_client_sends_the_api_key() -> None:
 
     assert str(seen[0].url) == "http://svc.test/context"
     assert seen[0].headers["Authorization"] == "Bearer k"
-    assert json.loads(seen[0].content) == {"text": "Hi.", "dictionary": []}
+    assert json.loads(seen[0].content) == {"text": "Hi."}
 
 
 def test_a_configured_tagger_checks_locally() -> None:

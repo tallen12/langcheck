@@ -28,7 +28,6 @@ class RejectionReason(StrEnum):
     UNKNOWN_SENTENCE = "unknown_sentence"
     UNKNOWN_KIND = "unknown_kind"
     NOT_FOUND = "not_found"
-    INTENTIONAL = "intentional"
     DISMISSED = "dismissed"
     NO_CHANGE = "no_change"
     TOO_LARGE = "too_large"
@@ -84,19 +83,17 @@ def resolve(
     sentences: Mapping[str, Sentence],
     *,
     policy: ValidationPolicy,
-    intentional: Collection[str] = (),
     dismissed: Collection[Span] = (),
 ) -> Resolution:
     """Place every issue of ``reply`` in ``sentences`` and validate it.
 
-    ``intentional`` holds terms from the document context that must not be flagged;
     ``dismissed`` holds spans the user dismissed. When issues overlap, the first one in
     the reply wins.
     """
     suggestions: list[Suggestion] = []
     rejections: list[Rejection] = []
     for issue in reply.issues:
-        match _resolve_issue(issue, sentences, policy, intentional, dismissed):
+        match _resolve_issue(issue, sentences, policy, dismissed):
             case RejectionReason() as reason:
                 rejections.append(Rejection(issue, reason))
             case suggestion if any(suggestion.span.overlaps(s.span) for s in suggestions):
@@ -110,7 +107,6 @@ def _resolve_issue(
     issue: ReplyIssue,
     sentences: Mapping[str, Sentence],
     policy: ValidationPolicy,
-    intentional: Collection[str],
     dismissed: Collection[Span],
 ) -> Suggestion | RejectionReason:
     sentence = sentences.get(issue.sentence)
@@ -122,8 +118,6 @@ def _resolve_issue(
     relative = find_occurrence(sentence.text, issue.original, issue.occurrence)
     if relative is None:
         return RejectionReason.NOT_FOUND
-    if touches_terms(sentence.text, relative, intentional):
-        return RejectionReason.INTENTIONAL
     span = relative.shifted(sentence.span.start)
     if any(span.overlaps(d) for d in dismissed):
         return RejectionReason.DISMISSED
