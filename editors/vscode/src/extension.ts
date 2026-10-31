@@ -5,7 +5,6 @@ import {
   LanguageClient,
   LanguageClientOptions,
   ServerOptions,
-  TransportKind,
 } from "vscode-languageclient/node";
 
 const SECTION = "langcheck";
@@ -71,10 +70,11 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
   if (apiKey) {
     env["LANGCHECK_SERVER__API_KEY"] = apiKey;
   }
+  // No `transport`: naming stdio makes the client add `--stdio`, which `langcheck lsp` rejects;
+  // leaving it out still uses stdio.
   const serverOptions: ServerOptions = {
     command: config.get<string>("command", "langcheck"),
     args: [...config.get<string[]>("args", []), "lsp"],
-    transport: TransportKind.stdio,
     options: { env },
   };
   const languages = config.get<string[]>("languages", ["markdown", "plaintext"]);
