@@ -39,6 +39,7 @@ class Reader:
 @dataclass
 class FakeRuntime:
     trained: list[int] = field(default_factory=list)
+    synthetic: list[int] = field(default_factory=list)
 
     def train(
         self,
@@ -47,10 +48,13 @@ class FakeRuntime:
         tagger: Path,
         output: Path,
         epochs: int,
+        synthetic: int,
+        clean: Sequence[str],
         device: str,
         log: Callable[[str], None],
     ) -> None:
         self.trained.append(len(sentences))
+        self.synthetic.append(synthetic)
 
     def load(
         self, tagger: Path, proposer: Path, *, device: str, width: int
@@ -113,3 +117,24 @@ def test_rows_render_each_cutoff() -> None:
     row = RecallRow(scoring="x", cases=1, recall={1: 0.5}, deletions_first=0.0)
 
     assert "@1 0.500" in render_rows([row])
+
+
+def test_training_passes_on_synthetic_copies(tmp_path: Path) -> None:
+    write_sets(tmp_path, Dataset.BEA19_TRAIN, Dataset.FCE_TRAIN)
+    runtime = FakeRuntime()
+
+    code = run(
+        Cli(tmp_path),
+        runtime,
+        "train",
+        "out",
+        "--tagger",
+        "t",
+        "--synthetic",
+        "2",
+        "--data",
+        str(tmp_path),
+    )
+
+    assert code == 0
+    assert runtime.synthetic == [2]

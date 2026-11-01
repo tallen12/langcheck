@@ -1,6 +1,7 @@
 """``langcheck proposer``: train the token proposer on a tagger and measure its recall."""
 
 import json
+import random
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Protocol
@@ -21,6 +22,13 @@ from langcheck.proposal.measure import (
 )
 from langcheck.proposal.protocols import ProposalSource
 from langcheck.proposal.targets import training_targets
+from langcheck.synthesis.clean_text import clean_sentences, read_texts
+from langcheck.synthesis.corruption import (
+    corrupt_all,
+    corrupt_context,
+    learn_confusions,
+    synthesize,
+)
 from langcheck.tagging.protocols import SentenceReader
 from langcheck.tagging.tiers import TierPolicy
 
@@ -50,6 +58,8 @@ class ProposerRuntime(Protocol):
         tagger: Path,
         output: Path,
         epochs: int,
+        synthetic: int,
+        clean: Sequence[str],
         device: str,
         log: Callable[[str], None],
     ) -> None:
@@ -88,6 +98,8 @@ class TransformerProposerRuntime:
         tagger: Path,
         output: Path,
         epochs: int,
+        synthetic: int,
+        clean: Sequence[str],
         device: str,
         log: Callable[[str], None],
     ) -> None:
@@ -111,19 +123,36 @@ class TransformerProposerRuntime:
         loaded = load_checkpoint(tagger, device=target)
         reader = _tagger_reader(tagger, loaded, target)
         contexts = contexts_of(sentences, loaded.info.context_sentences)
-        log(f"flagging {len(sentences)} sentences")
-        readings = reader.read([s.tokens for s in sentences], contexts=contexts)
-        items = [
-            ProposerItem(
-                sentence.tokens,
-                context,
-                training_targets(
-                    sentence, slot_flags(reading.scores, reading.commas, FALSE_ALARM_POLICY)
-                ),
+
+        def items_of(found: Sequence[AnnotatedSentence], read: Sequence[str]) -> list[ProposerItem]:
+            log(f"flagging {len(found)} sentences")
+            readings = reader.read([s.tokens for s in found], contexts=read)
+            return [
+                ProposerItem(
+                    sentence.tokens,
+                    context,
+                    training_targets(
+                        sentence, slot_flags(reading.scores, reading.commas, FALSE_ALARM_POLICY)
+                    ),
+                )
+                for sentence, context, reading in zip(found, read, readings, strict=True)
+            ]
+
+        real = list(zip(sentences, contexts, strict=True))
+        kept, held = split_holdout(real)
+        training = items_of([s for s, _ in kept], [c for _, c in kept])
+        validation = items_of([s for s, _ in held], [c for _, c in held])
+        if synthetic:
+            made = synthesize([s for s, _ in kept], copies=synthetic)
+            training += items_of([s for _, s in made], [kept[i][1] for i, _ in made])
+        if clean:
+            found = list(clean_sentences(clean, context_sentences=loaded.info.context_sentences))
+            confusions = learn_confusions([s for s, _ in kept])
+            rng = random.Random(0)
+            training += items_of(
+                corrupt_all([c.words for c in found], confusions),
+                [corrupt_context(c.context, confusions, rng) for c in found],
             )
-            for sentence, context, reading in zip(sentences, contexts, readings, strict=True)
-        ]
-        training, validation = split_holdout(items)
         cases = sum(len(item.targets) for item in training)
         log(f"{len(training)} training sentences, {cases} targets")
         shape = shape_for(loaded.tagger)
@@ -213,6 +242,12 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
         *,
         tagger: Annotated[Path, Parameter(help="The tagger checkpoint to read with.")],
         epochs: int = 3,
+        synthetic: Annotated[
+            int, Parameter(help="Corrupted copies of each corrected training sentence to add.")
+        ] = 0,
+        clean: Annotated[
+            Path | None, Parameter(help="JSONL of edited prose to corrupt and add, one per text.")
+        ] = None,
         limit: Annotated[int | None, Parameter(help="Only the first N sentences.")] = None,
         device: str = "cuda",
         data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
@@ -231,6 +266,8 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
                 tagger=tagger,
                 output=output,
                 epochs=epochs,
+                synthetic=synthetic,
+                clean=read_texts(clean) if clean is not None else (),
                 device=device,
                 log=env.out,
             )

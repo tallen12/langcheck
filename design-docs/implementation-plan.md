@@ -692,5 +692,14 @@ second feature that lands after it.
   gain -52 against -116: it hurts less but finds less. The gate was fitted on other
   sentences of both sets. On CPU it took 2.1 s at p50 and 5.5 s at p90 per flagged sentence,
   before the gate.
+- **Training on corrupted text.** `--synthetic` inverts gold edits at their real rates and
+  `--clean` corrupts known-clean text the same way. A proposer trained with both, on the
+  same tagger and without refitting the gate, moves F0.5 from 0.471 to 0.503 on the first 500
+  `bea19-dev` sentences, 0.286 to 0.380 on 500 WikEd sentences and 0.545 to 0.587 on JFLEG
+  dev. A tagger trained with both is no better: at matching precision its recall is the same
+  or slightly lower. Refitting the gate and more epochs are untried; the last epoch was the
+  best.
+- **Larger context.** Context is two previous sentences of plain text in the encoder's input,
+  capped at 256 tokens. A separate, larger context feature might help; nothing is measured.
 - **Scaling past one process.** Redis or SQL adapters for `DocumentStore` and
   `ResultCache`, and a separate scorer service, when one process is not enough.

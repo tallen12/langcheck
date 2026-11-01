@@ -1,5 +1,6 @@
 """``langcheck tagger``: train the per-token error tagger, evaluate it and flag text."""
 
+import random
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Annotated, Protocol
@@ -10,6 +11,13 @@ from langcheck.cli.environment import CliEnvironment
 from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.examples import load_examples
 from langcheck.evaluation.m2 import AnnotatedSentence, read_m2
+from langcheck.synthesis.clean_text import clean_sentences, read_texts
+from langcheck.synthesis.corruption import (
+    corrupt_all,
+    corrupt_context,
+    learn_confusions,
+    synthesize,
+)
 from langcheck.tagging.alignment import preceding_text
 from langcheck.tagging.document import flag_text
 from langcheck.tagging.loaded import Trained, load_trained, torch_limit
@@ -46,6 +54,8 @@ class TaggerRuntime(Protocol):
         batch_size: int,
         precision: float,
         context_sentences: int,
+        synthetic: int,
+        clean: Sequence[str],
         device: str,
         log: Callable[[str], None],
     ) -> None:
@@ -81,6 +91,8 @@ class TransformerRuntime:
         batch_size: int,
         precision: float,
         context_sentences: int,
+        synthetic: int,
+        clean: Sequence[str],
         device: str,
         log: Callable[[str], None],
     ) -> None:
@@ -104,6 +116,19 @@ class TransformerRuntime:
         if not validation:
             msg = f"{len(sentences)} sentences leave none for validation; use more"
             raise TaggerTrainingError(msg)
+        real_training = list(training)
+        if synthetic:
+            made = synthesize([item.sentence for item in real_training], copies=synthetic)
+            training += [InContext(s, real_training[i].context) for i, s in made]
+        if clean:
+            found = list(clean_sentences(clean, context_sentences=context_sentences))
+            confusions = learn_confusions([item.sentence for item in real_training])
+            made_clean = corrupt_all([c.words for c in found], confusions)
+            rng = random.Random(0)
+            training += [
+                InContext(s, corrupt_context(c.context, confusions, rng))
+                for s, c in zip(made_clean, found, strict=True)
+            ]
         log(f"{len(training)} training sentences, {len(validation)} validation sentences")
         result = train(
             tagger, tokenizer, training, validation, device=target, options=options, log=log
@@ -197,6 +222,12 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
         precision: Annotated[float, Parameter(help="Precision to choose a threshold at.")] = 0.5,
         limit: Annotated[int | None, Parameter(help="Only the first N sentences.")] = None,
         context: Annotated[int, Parameter(help="Preceding sentences to read.")] = 0,
+        synthetic: Annotated[
+            int, Parameter(help="Corrupted copies of each corrected training sentence to add.")
+        ] = 0,
+        clean: Annotated[
+            Path | None, Parameter(help="JSONL of edited prose to corrupt and add, one per text.")
+        ] = None,
         device: DeviceOption = "cuda",
         data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
     ) -> int:
@@ -218,6 +249,8 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
                 batch_size=batch_size,
                 precision=precision,
                 context_sentences=context,
+                synthetic=synthetic,
+                clean=read_texts(clean) if clean is not None else (),
                 device=device,
                 log=env.out,
             )

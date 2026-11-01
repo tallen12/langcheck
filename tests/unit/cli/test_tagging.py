@@ -60,6 +60,8 @@ class FakeRuntime:
         batch_size: int,
         precision: float,
         context_sentences: int,
+        synthetic: int,
+        clean: Sequence[str],
         device: str,
         log: Callable[[str], None],
     ) -> None:
@@ -272,6 +274,8 @@ def test_too_few_sentences_for_validation_are_refused(
             batch_size=1,
             precision=0.5,
             context_sentences=0,
+            synthetic=0,
+            clean=(),
             device="cpu",
             log=lambda _: None,
         )

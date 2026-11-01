@@ -37,6 +37,8 @@ class WordTableRuntime:
         batch_size: int,
         precision: float,
         context_sentences: int,
+        synthetic: int,
+        clean: Sequence[str],
         device: str,
         log: Callable[[str], None],
     ) -> None:
