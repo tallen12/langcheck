@@ -148,6 +148,16 @@ def test_measure_file_scores_text_and_corrected_lines(tmp_path: Path) -> None:
     assert "tagger-ranked\t1.000\t1.000\t1.000" in cli.output
 
 
+def test_measure_flags_only_from_the_suggestion_threshold(tmp_path: Path) -> None:
+    pairs = tmp_path / "pairs.jsonl"
+    pairs.write_text('{"text": "He go home .", "corrected": "He goes home ."}\n', encoding="utf-8")
+    cli = Cli(tmp_path)
+
+    assert run(cli, "measure-file", "tagger", str(pairs), "--suggestion", "0.99") == CLEAN
+
+    assert "pairs: 1 sentences, 0 flags" in cli.output
+
+
 def test_an_unavailable_flag_says_why() -> None:
     lines = render_outcome("He go home.", Unavailable(FLAG, "LLM error: down"), show_rejected=False)
 

@@ -64,13 +64,16 @@ class EpochScoring:
     dataset: str
     examples: tuple[Example, ...]
     annotator: EditAnnotator
+    tiers: tuple[TierPolicy, ...] = (USER_POLICY,)
+    """Each is scored on its own, to compare where flagging begins."""
 
 
-def epoch_score_line(epoch: int, report: CorrectionReport) -> str:
+def epoch_score_line(epoch: int, tiers: TierPolicy, report: CorrectionReport) -> str:
     """One epoch's scores in the order ``langcheck suggest`` offers corrections."""
     row = next(row for row in report.strategies if row.strategy is Strategy.TAGGER_RANKED)
     return (
-        f"epoch {epoch}: {report.dataset} {report.sentences} sentences, tagger-ranked "
+        f"epoch {epoch}: {report.dataset} {report.sentences} sentences, flags from "
+        f"{tiers.suggestion:.2f}, tagger-ranked "
         f"precision {row.precision:.3f} recall {row.recall:.3f} F0.5 {row.f05:.4f} "
         f"gain {row.gain}/{row.needed}"
     )
@@ -88,12 +91,14 @@ class ProposerRuntime(Protocol):
         epochs: int,
         synthetic: int,
         clean: Sequence[str],
+        false_alarms: TierPolicy,
         scoring: EpochScoring | None,
         device: str,
         log: Callable[[str], None],
     ) -> None:
         """Train a proposer on the ``tagger`` checkpoint and save it to ``output``, logging
-        each epoch's F0.5 on ``scoring`` when given.
+        each epoch's F0.5 on ``scoring`` when given. Training sentences are flagged under
+        ``false_alarms``, so the proposer learns to leave alone what it flags wrongly.
         """
         ...
 
@@ -144,20 +149,27 @@ def _epoch_scorer(
         max_length=loaded.info.max_length,
         width=BEAM_WIDTH,
     )
-    pipeline = CorrectionPipeline(
-        corrector=ProposerCorrector(source, reader, policy),
-        reader=reader,
-        tiers=USER_POLICY,
-        policy=policy,
-        context_sentences=loaded.info.context_sentences,
-    )
+    pipelines = [
+        (
+            tiers,
+            CorrectionPipeline(
+                corrector=ProposerCorrector(source, reader, policy),
+                reader=reader,
+                tiers=tiers,
+                policy=policy,
+                context_sentences=loaded.info.context_sentences,
+            ),
+        )
+        for tiers in scoring.tiers
+    ]
     texts = [example.text for example in scoring.examples]
 
     def score(epoch: int) -> None:
-        # One sentence at a time: the reader and the proposer share the model, unlocked.
-        found = asyncio.run(suggest_all(pipeline, texts, concurrency=1, log=lambda _line: None))
-        report = measure(scoring.examples, found, scoring.annotator, dataset=scoring.dataset)
-        log(epoch_score_line(epoch, report))
+        for tiers, pipeline in pipelines:
+            # One sentence at a time: the reader and the proposer share the model, unlocked.
+            found = asyncio.run(suggest_all(pipeline, texts, concurrency=1, log=lambda _line: None))
+            report = measure(scoring.examples, found, scoring.annotator, dataset=scoring.dataset)
+            log(epoch_score_line(epoch, tiers, report))
 
     return score
 
@@ -174,12 +186,14 @@ class TransformerProposerRuntime:
         epochs: int,
         synthetic: int,
         clean: Sequence[str],
+        false_alarms: TierPolicy,
         scoring: EpochScoring | None,
         device: str,
         log: Callable[[str], None],
     ) -> None:
         """Train a proposer on the ``tagger`` checkpoint and save it to ``output``, logging
-        each epoch's F0.5 on ``scoring`` when given.
+        each epoch's F0.5 on ``scoring`` when given. Training sentences are flagged under
+        ``false_alarms``, so the proposer learns to leave alone what it flags wrongly.
         """
         import torch
 
@@ -209,7 +223,7 @@ class TransformerProposerRuntime:
                     sentence.tokens,
                     context,
                     training_targets(
-                        sentence, slot_flags(reading.scores, reading.commas, FALSE_ALARM_POLICY)
+                        sentence, slot_flags(reading.scores, reading.commas, false_alarms)
                     ),
                 )
                 for sentence, context, reading in zip(found, read, readings, strict=True)
@@ -335,6 +349,16 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
             int,
             Parameter(help="BEA-2019 dev sentences to measure F0.5 on after each epoch; 0 skips."),
         ] = SCORED_SENTENCES,
+        suggestion: Annotated[
+            tuple[float, ...],
+            Parameter(
+                help="Score where flagging begins when measuring F0.5; repeat to measure several."
+            ),
+        ] = (USER_POLICY.suggestion,),
+        false_alarms: Annotated[
+            float,
+            Parameter(help="Score where training sentences are flagged, false alarms included."),
+        ] = FALSE_ALARM_POLICY.suggestion,
         device: str = "cuda",
         data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
     ) -> int:
@@ -358,6 +382,10 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
                     SCORED_SET.value,
                     tuple(load_examples(SCORED_SET, files, annotator, limit=scored)),
                     annotator,
+                    tuple(
+                        TierPolicy(error=max(USER_POLICY.error, at), suggestion=at)
+                        for at in suggestion
+                    ),
                 )
             runtime.train(
                 sentences[:limit],
@@ -366,6 +394,9 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
                 epochs=epochs,
                 synthetic=synthetic,
                 clean=read_texts(clean) if clean is not None else (),
+                false_alarms=TierPolicy(
+                    error=max(USER_POLICY.error, false_alarms), suggestion=false_alarms
+                ),
                 scoring=scoring,
                 device=device,
                 log=env.out,

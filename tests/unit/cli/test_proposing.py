@@ -16,6 +16,7 @@ from langcheck.evaluation.m2 import AnnotatedSentence
 from langcheck.proposal.protocols import Proposal, ProposalRequest, ProposalSource
 from langcheck.tagging.models import SentenceReading, SlotScores
 from langcheck.tagging.protocols import SentenceReader
+from langcheck.tagging.tiers import TierPolicy
 from tests.unit.cli.test_main import Cli
 
 M2 = """S He go home .
@@ -49,6 +50,7 @@ class FakeRuntime:
     trained: list[int] = field(default_factory=list)
     synthetic: list[int] = field(default_factory=list)
     scoring: list[EpochScoring | None] = field(default_factory=list)
+    false_alarms: list[TierPolicy] = field(default_factory=list)
 
     def train(
         self,
@@ -59,6 +61,7 @@ class FakeRuntime:
         epochs: int,
         synthetic: int,
         clean: Sequence[str],
+        false_alarms: TierPolicy,
         scoring: EpochScoring | None,
         device: str,
         log: Callable[[str], None],
@@ -66,6 +69,7 @@ class FakeRuntime:
         self.trained.append(len(sentences))
         self.synthetic.append(synthetic)
         self.scoring.append(scoring)
+        self.false_alarms.append(false_alarms)
 
     def load(
         self, tagger: Path, proposer: Path, *, device: str, width: int
@@ -226,9 +230,50 @@ def test_epoch_score_line_shows_the_tagger_ranked_scores() -> None:
         records=[],
     )
 
-    line = epoch_score_line(3, report)
+    line = epoch_score_line(3, TierPolicy(suggestion=0.05), report)
 
     assert line == (
-        "epoch 3: bea19-dev 2 sentences, tagger-ranked precision 0.500 recall 0.250 "
-        "F0.5 0.4167 gain 1/4"
+        "epoch 3: bea19-dev 2 sentences, flags from 0.05, tagger-ranked precision 0.500 "
+        "recall 0.250 F0.5 0.4167 gain 1/4"
     )
+
+
+def test_training_scores_at_each_threshold_and_flags_from_false_alarms(tmp_path: Path) -> None:
+    write_sets(tmp_path, *TRAINING)
+    runtime = FakeRuntime()
+
+    code = run(
+        Cli(tmp_path),
+        runtime,
+        "train",
+        "--tagger",
+        "t",
+        "--false-alarms",
+        "0.02",
+        "--data",
+        str(tmp_path),
+        "--suggestion",
+        "0.3",
+        "--suggestion",
+        "0.05",
+        "out",
+    )
+
+    assert code == 0
+    assert runtime.trained == [2]
+    [scoring] = runtime.scoring
+    assert scoring is not None
+    assert [tiers.suggestion for tiers in scoring.tiers] == [0.3, 0.05]
+    assert [policy.suggestion for policy in runtime.false_alarms] == [0.02]
+
+
+def test_training_defaults_to_the_user_and_false_alarm_thresholds(tmp_path: Path) -> None:
+    write_sets(tmp_path, *TRAINING)
+    runtime = FakeRuntime()
+
+    run(Cli(tmp_path), runtime, "train", "out", "--tagger", "t", "--data", str(tmp_path))
+
+    [scoring] = runtime.scoring
+    assert scoring is not None
+    assert [tiers.suggestion for tiers in scoring.tiers] == [0.3]
+    assert [policy.suggestion for policy in runtime.false_alarms] == [0.1]

@@ -147,11 +147,12 @@ def suggest_app(
         annotator: EditAnnotator,
         trained: Trained | Proposing,
         loaded: ClientSettings,
+        tiers: TierPolicy,
         policy: CorrectionPolicy,
         output: Path | None,
     ) -> None:
         texts = [example.text for example in examples]
-        found = asyncio.run(outcomes_of_all(texts, trained, loaded, DEFAULT_POLICY, policy))
+        found = asyncio.run(outcomes_of_all(texts, trained, loaded, tiers, policy))
         report = measure(examples, found, annotator, dataset=name)
         if output is not None:
             output.parent.mkdir(parents=True, exist_ok=True)
@@ -234,6 +235,9 @@ def suggest_app(
         proposer: Annotated[
             Path | None, Parameter(help="A trained proposer to use instead of the LLM.")
         ] = None,
+        suggestion: Annotated[float, Parameter(help="Lowest score flagged at all.")] = (
+            DEFAULT_POLICY.suggestion
+        ),
         device: Annotated[str, Parameter(help="PyTorch device, such as cpu or cuda.")] = "cuda",
         data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
         config: Annotated[Path | None, Parameter(help="YAML settings file.")] = None,
@@ -254,7 +258,8 @@ def suggest_app(
             annotator = env.edit_annotators()
             examples = load_examples(dataset, files, annotator, limit=limit)
             policy = CorrectionPolicy(count=count, min_reduction=min_reduction)
-            report_on(dataset.value, examples, annotator, trained, loaded, policy, output)
+            tiers = TierPolicy(error=max(DEFAULT_POLICY.error, suggestion), suggestion=suggestion)
+            report_on(dataset.value, examples, annotator, trained, loaded, tiers, policy, output)
             return CLEAN
 
         return guarded(run)
@@ -276,6 +281,9 @@ def suggest_app(
         proposer: Annotated[
             Path | None, Parameter(help="A trained proposer to use instead of the LLM.")
         ] = None,
+        suggestion: Annotated[float, Parameter(help="Lowest score flagged at all.")] = (
+            DEFAULT_POLICY.suggestion
+        ),
         device: Annotated[str, Parameter(help="PyTorch device, such as cpu or cuda.")] = "cuda",
         config: Annotated[Path | None, Parameter(help="YAML settings file.")] = None,
         llm_url: Annotated[
@@ -291,7 +299,8 @@ def suggest_app(
             annotator = env.edit_annotators()
             examples = load_corrected_pairs(file, annotator, limit=limit)
             policy = CorrectionPolicy(count=count, min_reduction=min_reduction)
-            report_on(file.stem, examples, annotator, trained, loaded, policy, output)
+            tiers = TierPolicy(error=max(DEFAULT_POLICY.error, suggestion), suggestion=suggestion)
+            report_on(file.stem, examples, annotator, trained, loaded, tiers, policy, output)
             return CLEAN
 
         return guarded(run)
