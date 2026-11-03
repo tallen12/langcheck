@@ -3,6 +3,7 @@
 import asyncio
 import json
 import random
+import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -203,6 +204,7 @@ class TransformerProposerRuntime:
             shape_for,
         )
         from langcheck.proposal.model import TokenProposer
+        from langcheck.proposal.stores import MappedFileStore
         from langcheck.proposal.training import ProposerItem, ProposerOptions, train_proposer
         from langcheck.tagging.checkpoint import load_checkpoint
         from langcheck.tagging.loaded import torch_limit
@@ -248,21 +250,27 @@ class TransformerProposerRuntime:
         log(f"{len(training)} training sentences, {cases} targets")
         shape = shape_for(loaded.tagger)
         proposer = TokenProposer(shape).to(target)
-        result = train_proposer(
-            loaded.tagger,
-            proposer,
-            loaded.tokenizer,
-            training,
-            validation,
-            device=target,
-            options=ProposerOptions(epochs=epochs),
-            log=log,
-            after_epoch=(
-                (lambda _epoch: None)
-                if scoring is None
-                else _epoch_scorer(scoring, loaded, reader, proposer, target, log)
-            ),
-        )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        # Beside the output rather than in the temp folder, which may be RAM-backed.
+        with tempfile.TemporaryDirectory(
+            prefix=f".{output.name}-states-", dir=output.parent
+        ) as states:
+            result = train_proposer(
+                loaded.tagger,
+                proposer,
+                loaded.tokenizer,
+                training,
+                validation,
+                device=target,
+                options=ProposerOptions(epochs=epochs),
+                log=log,
+                store=MappedFileStore(Path(states)),
+                after_epoch=(
+                    (lambda _epoch: None)
+                    if scoring is None
+                    else _epoch_scorer(scoring, loaded, reader, proposer, target, log)
+                ),
+            )
         save_proposer(
             output,
             proposer,
