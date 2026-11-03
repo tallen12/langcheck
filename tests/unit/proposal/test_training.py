@@ -76,3 +76,26 @@ def test_no_epochs_is_refused(tiny_tokenizer: PreTrainedTokenizerFast) -> None:
             options=ProposerOptions(epochs=0, max_length=32),
             log=lambda _: None,
         )
+
+
+def test_after_epoch_runs_once_per_epoch_after_the_loss(
+    tiny_tokenizer: PreTrainedTokenizerFast,
+) -> None:
+    proposer = proposer_for(len(tiny_tokenizer))
+    lines: list[str] = []
+    seen: list[tuple[int, bool, str]] = []
+
+    train_proposer(
+        tiny_tagger(tiny_tokenizer),
+        proposer,
+        tiny_tokenizer,
+        [ITEM] * 4,
+        [ITEM],
+        device=CPU,
+        options=ProposerOptions(epochs=2, batch_size=4, max_length=32),
+        log=lines.append,
+        after_epoch=lambda epoch: seen.append((epoch, proposer.training, lines[-1])),
+    )
+
+    assert [(epoch, training) for epoch, training, _ in seen] == [(1, False), (2, False)]
+    assert all(line.startswith(f"epoch {epoch}: validation loss") for epoch, _, line in seen)

@@ -132,8 +132,12 @@ def train_proposer(
     device: torch.device,
     options: ProposerOptions,
     log: Callable[[str], None],
+    after_epoch: Callable[[int], None] = lambda _epoch: None,
 ) -> ProposerResult:
-    """Fit ``proposer``, which ends with its best epoch's weights; ``tagger`` never changes."""
+    """Fit ``proposer``, which ends with its best epoch's weights; ``tagger`` never changes.
+    ``after_epoch`` gets each epoch's number once its loss is logged, with the proposer in
+    evaluation mode, to measure it in other ways.
+    """
     torch.manual_seed(options.seed)
     shuffler = random.Random(options.seed)
     pad = int(tokenizer.pad_token_id or 0)
@@ -198,6 +202,7 @@ def train_proposer(
                 )
         mean = sum(losses) / len(losses)
         log(f"epoch {epoch}: validation loss {mean:.4f}")
+        after_epoch(epoch)
         if best is None or mean < best.loss:
             best = ProposerResult(epoch, mean)
             best_state = copy.deepcopy(proposer.state_dict())

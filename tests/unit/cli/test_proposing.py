@@ -2,7 +2,15 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from langcheck.cli.proposing import FAILED, RecallRow, proposer_app, render_rows
+from langcheck.cli.proposing import (
+    FAILED,
+    EpochScoring,
+    RecallRow,
+    epoch_score_line,
+    proposer_app,
+    render_rows,
+)
+from langcheck.correction.measure import CorrectionReport, Strategy, StrategyRow
 from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.m2 import AnnotatedSentence
 from langcheck.proposal.protocols import Proposal, ProposalRequest, ProposalSource
@@ -40,6 +48,7 @@ class Reader:
 class FakeRuntime:
     trained: list[int] = field(default_factory=list)
     synthetic: list[int] = field(default_factory=list)
+    scoring: list[EpochScoring | None] = field(default_factory=list)
 
     def train(
         self,
@@ -50,16 +59,21 @@ class FakeRuntime:
         epochs: int,
         synthetic: int,
         clean: Sequence[str],
+        scoring: EpochScoring | None,
         device: str,
         log: Callable[[str], None],
     ) -> None:
         self.trained.append(len(sentences))
         self.synthetic.append(synthetic)
+        self.scoring.append(scoring)
 
     def load(
         self, tagger: Path, proposer: Path, *, device: str, width: int
     ) -> tuple[ProposalSource, SentenceReader, int]:
         return Source(), Reader(), 0
+
+
+TRAINING = (Dataset.BEA19_TRAIN, Dataset.FCE_TRAIN, Dataset.BEA19_DEV)
 
 
 def run(cli: Cli, runtime: FakeRuntime, *argv: str) -> int:
@@ -77,7 +91,7 @@ def write_sets(root: Path, *datasets: Dataset) -> None:
 
 
 def test_training_reads_both_sets(tmp_path: Path) -> None:
-    write_sets(tmp_path, Dataset.BEA19_TRAIN, Dataset.FCE_TRAIN)
+    write_sets(tmp_path, *TRAINING)
     runtime = FakeRuntime()
 
     code = run(Cli(tmp_path), runtime, "train", "out", "--tagger", "t", "--data", str(tmp_path))
@@ -120,7 +134,7 @@ def test_rows_render_each_cutoff() -> None:
 
 
 def test_training_passes_on_synthetic_copies(tmp_path: Path) -> None:
-    write_sets(tmp_path, Dataset.BEA19_TRAIN, Dataset.FCE_TRAIN)
+    write_sets(tmp_path, *TRAINING)
     runtime = FakeRuntime()
 
     code = run(
@@ -138,3 +152,83 @@ def test_training_passes_on_synthetic_copies(tmp_path: Path) -> None:
 
     assert code == 0
     assert runtime.synthetic == [2]
+
+
+def test_training_scores_on_bea19_dev_sentences(tmp_path: Path) -> None:
+    write_sets(tmp_path, *TRAINING)
+    runtime = FakeRuntime()
+
+    code = run(Cli(tmp_path), runtime, "train", "out", "--tagger", "t", "--data", str(tmp_path))
+
+    assert code == 0
+    [scoring] = runtime.scoring
+    assert scoring is not None
+    assert scoring.dataset == "bea19-dev"
+    assert [example.source for example in scoring.examples] == [("He", "go", "home", ".")]
+
+
+def test_training_without_scoring_needs_no_dev_set(tmp_path: Path) -> None:
+    write_sets(tmp_path, Dataset.BEA19_TRAIN, Dataset.FCE_TRAIN)
+    runtime = FakeRuntime()
+
+    code = run(
+        Cli(tmp_path),
+        runtime,
+        "train",
+        "out",
+        "--tagger",
+        "t",
+        "--scored",
+        "0",
+        "--data",
+        str(tmp_path),
+    )
+
+    assert code == 0
+    assert runtime.scoring == [None]
+
+
+def test_training_without_the_dev_set_fails(tmp_path: Path) -> None:
+    write_sets(tmp_path, Dataset.BEA19_TRAIN, Dataset.FCE_TRAIN)
+    cli = Cli(tmp_path)
+
+    code = run(cli, FakeRuntime(), "train", "out", "--tagger", "t", "--data", str(tmp_path))
+
+    assert code == FAILED
+    assert "evaluate fetch bea19-dev" in "".join(cli.err)
+
+
+def test_epoch_score_line_shows_the_tagger_ranked_scores() -> None:
+    rows = [
+        StrategyRow(
+            strategy=strategy,
+            tp=1,
+            fp=1,
+            fn=3,
+            precision=0.5,
+            recall=0.25 if strategy is Strategy.TAGGER_RANKED else 0.0,
+            f05=0.4167,
+            needed=4,
+            gain=1,
+            share=0.25,
+        )
+        for strategy in Strategy
+    ]
+    report = CorrectionReport(
+        dataset="bea19-dev",
+        sentences=2,
+        flags=2,
+        unavailable=0,
+        no_corrections=0,
+        strategies=rows,
+        fates=[],
+        order=[],
+        records=[],
+    )
+
+    line = epoch_score_line(3, report)
+
+    assert line == (
+        "epoch 3: bea19-dev 2 sentences, tagger-ranked precision 0.500 recall 0.250 "
+        "F0.5 0.4167 gain 1/4"
+    )

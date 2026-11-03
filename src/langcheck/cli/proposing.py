@@ -1,16 +1,21 @@
 """``langcheck proposer``: train the token proposer on a tagger and measure its recall."""
 
+import asyncio
 import json
 import random
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Protocol
 
 from cyclopts import App, Parameter
 
 from langcheck.cli.environment import CliEnvironment
+from langcheck.correction.measure import CorrectionReport, Strategy
 from langcheck.evaluation.datasets import Dataset, dataset_files
+from langcheck.evaluation.examples import Example, load_examples
 from langcheck.evaluation.m2 import AnnotatedSentence, read_m2
+from langcheck.evaluation.protocols import EditAnnotator
 from langcheck.proposal.measure import (
     RecallRow,
     build_cases,
@@ -35,6 +40,7 @@ from langcheck.tagging.tiers import TierPolicy
 if TYPE_CHECKING:
     import torch
 
+    from langcheck.proposal.model import TokenProposer
     from langcheck.tagging.checkpoint import Checkpoint
 
 CLEAN = 0
@@ -44,8 +50,30 @@ TRAINING_SETS = (Dataset.BEA19_TRAIN, Dataset.FCE_TRAIN)
 FALSE_ALARM_POLICY = TierPolicy(suggestion=0.1)
 """Low, to find false alarms: the tagger trained on these sentences and is sure of them."""
 USER_POLICY = TierPolicy()
+SCORED_SET = Dataset.BEA19_DEV
+SCORED_SENTENCES = 500
+"""The first 500 BEA-2019 dev sentences are what earlier proposers were compared on."""
 
 type Guard = Callable[[Callable[[], int]], int]
+
+
+@dataclass(frozen=True, slots=True)
+class EpochScoring:
+    """Sentences the whole correction pipeline corrects after each epoch, for its F0.5."""
+
+    dataset: str
+    examples: tuple[Example, ...]
+    annotator: EditAnnotator
+
+
+def epoch_score_line(epoch: int, report: CorrectionReport) -> str:
+    """One epoch's scores in the order ``langcheck suggest`` offers corrections."""
+    row = next(row for row in report.strategies if row.strategy is Strategy.TAGGER_RANKED)
+    return (
+        f"epoch {epoch}: {report.dataset} {report.sentences} sentences, tagger-ranked "
+        f"precision {row.precision:.3f} recall {row.recall:.3f} F0.5 {row.f05:.4f} "
+        f"gain {row.gain}/{row.needed}"
+    )
 
 
 class ProposerRuntime(Protocol):
@@ -60,10 +88,13 @@ class ProposerRuntime(Protocol):
         epochs: int,
         synthetic: int,
         clean: Sequence[str],
+        scoring: EpochScoring | None,
         device: str,
         log: Callable[[str], None],
     ) -> None:
-        """Train a proposer on the ``tagger`` checkpoint and save it to ``output``."""
+        """Train a proposer on the ``tagger`` checkpoint and save it to ``output``, logging
+        each epoch's F0.5 on ``scoring`` when given.
+        """
         ...
 
     def load(
@@ -88,6 +119,49 @@ def _tagger_reader(path: Path, loaded: Checkpoint, device: torch.device) -> Sent
     )
 
 
+def _epoch_scorer(
+    scoring: EpochScoring,
+    loaded: Checkpoint,
+    reader: SentenceReader,
+    proposer: TokenProposer,
+    device: torch.device,
+    log: Callable[[str], None],
+) -> Callable[[int], None]:
+    """Logs the F0.5 of ``langcheck suggest --proposer`` with ``proposer`` as it is then."""
+    from langcheck.correction.measure import measure, suggest_all
+    from langcheck.correction.models import CorrectionPolicy
+    from langcheck.correction.pipeline import CorrectionPipeline
+    from langcheck.proposal.corrector import ProposerCorrector, proposer_policy
+    from langcheck.proposal.loaded import BEAM_WIDTH
+    from langcheck.proposal.search import BeamProposer
+
+    policy = proposer_policy(CorrectionPolicy())
+    source = BeamProposer(
+        loaded.tagger,
+        proposer,
+        loaded.tokenizer,
+        device=device,
+        max_length=loaded.info.max_length,
+        width=BEAM_WIDTH,
+    )
+    pipeline = CorrectionPipeline(
+        corrector=ProposerCorrector(source, reader, policy),
+        reader=reader,
+        tiers=USER_POLICY,
+        policy=policy,
+        context_sentences=loaded.info.context_sentences,
+    )
+    texts = [example.text for example in scoring.examples]
+
+    def score(epoch: int) -> None:
+        # One sentence at a time: the reader and the proposer share the model, unlocked.
+        found = asyncio.run(suggest_all(pipeline, texts, concurrency=1, log=lambda _line: None))
+        report = measure(scoring.examples, found, scoring.annotator, dataset=scoring.dataset)
+        log(epoch_score_line(epoch, report))
+
+    return score
+
+
 class TransformerProposerRuntime:
     """The real runtime, importing PyTorch only when a command needs it."""
 
@@ -100,10 +174,13 @@ class TransformerProposerRuntime:
         epochs: int,
         synthetic: int,
         clean: Sequence[str],
+        scoring: EpochScoring | None,
         device: str,
         log: Callable[[str], None],
     ) -> None:
-        """Train a proposer on the ``tagger`` checkpoint and save it to ``output``."""
+        """Train a proposer on the ``tagger`` checkpoint and save it to ``output``, logging
+        each epoch's F0.5 on ``scoring`` when given.
+        """
         import torch
 
         from langcheck.proposal.checkpoint import (
@@ -166,6 +243,11 @@ class TransformerProposerRuntime:
             device=target,
             options=ProposerOptions(epochs=epochs),
             log=log,
+            after_epoch=(
+                (lambda _epoch: None)
+                if scoring is None
+                else _epoch_scorer(scoring, loaded, reader, proposer, target, log)
+            ),
         )
         save_proposer(
             output,
@@ -249,6 +331,10 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
             Path | None, Parameter(help="JSONL of edited prose to corrupt and add, one per text.")
         ] = None,
         limit: Annotated[int | None, Parameter(help="Only the first N sentences.")] = None,
+        scored: Annotated[
+            int,
+            Parameter(help="BEA-2019 dev sentences to measure F0.5 on after each epoch; 0 skips."),
+        ] = SCORED_SENTENCES,
         device: str = "cuda",
         data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
     ) -> int:
@@ -261,6 +347,18 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
                 if found is None:
                     return FAILED
                 sentences += found
+            scoring: EpochScoring | None = None
+            if scored > 0:
+                files = dataset_files(SCORED_SET, data_dir(data))
+                if not all(path.is_file() for path in files):
+                    env.err(f"langcheck: run `langcheck evaluate fetch {SCORED_SET.value}` first")
+                    return FAILED
+                annotator = env.edit_annotators()
+                scoring = EpochScoring(
+                    SCORED_SET.value,
+                    tuple(load_examples(SCORED_SET, files, annotator, limit=scored)),
+                    annotator,
+                )
             runtime.train(
                 sentences[:limit],
                 tagger=tagger,
@@ -268,6 +366,7 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
                 epochs=epochs,
                 synthetic=synthetic,
                 clean=read_texts(clean) if clean is not None else (),
+                scoring=scoring,
                 device=device,
                 log=env.out,
             )
