@@ -6,6 +6,7 @@ import random
 import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Protocol
 
@@ -23,6 +24,7 @@ from langcheck.proposal.measure import (
     contexts_of,
     flagged_spans,
     gold_spans,
+    raw_cases,
     recall_row,
     tune,
 )
@@ -36,7 +38,7 @@ from langcheck.synthesis.corruption import (
     synthesize,
 )
 from langcheck.tagging.protocols import SentenceReader
-from langcheck.tagging.tiers import TierPolicy
+from langcheck.tagging.tiers import Adjacent, Falloff, Growth, TierPolicy
 
 if TYPE_CHECKING:
     import torch
@@ -60,6 +62,15 @@ SCORED_BATCH = 64
 type Guard = Callable[[Callable[[], int]], int]
 
 
+class Measured(StrEnum):
+    """What is scored after each epoch."""
+
+    PROPOSALS = "proposals"
+    """Only the beam's own proposals at the flags, before any reranking or filter."""
+    PIPELINE = "pipeline"
+    """Those, then the whole correction pipeline's corrections at each threshold."""
+
+
 @dataclass(frozen=True, slots=True)
 class EpochScoring:
     """Sentences scored after each epoch: the proposer's own proposals at the flags, then
@@ -75,6 +86,7 @@ class EpochScoring:
     """Each is scored on its own, to compare where flagging begins. The first chooses the
     epoch kept: the one whose proposals, before reranking or filtering, put a right answer
     highest (MRR). Training targets the right answer first; the filters come afterwards."""
+    measured: Measured = Measured.PIPELINE
 
 
 def unfiltered_line(epoch: int, tiers: TierPolicy, row: RecallRow) -> str:
@@ -155,9 +167,9 @@ def _epoch_scorer(
     device: torch.device,
     log: Callable[[str], None],
 ) -> Callable[[int], float]:
-    """Logs how ``proposer``, as it is then, ranks right answers before any filter, and the
-    scores of ``langcheck suggest --proposer``; gives the unfiltered MRR under the first
-    tiers.
+    """Logs how ``proposer``, as it is then, ranks right answers before any filter, and,
+    when the pipeline is measured, the scores of ``langcheck suggest --proposer``; gives the
+    unfiltered MRR under the first tiers.
     """
     from langcheck.correction.measure import measure, suggest_batched
     from langcheck.correction.models import CorrectionPolicy
@@ -187,6 +199,7 @@ def _epoch_scorer(
             ),
         )
         for tiers in scoring.tiers
+        if scoring.measured is Measured.PIPELINE
     ]
     texts = [example.text for example in scoring.examples]
     first = scoring.tiers[0]
@@ -195,15 +208,7 @@ def _epoch_scorer(
     readings = reader.read([s.tokens for s in scoring.sentences], contexts=contexts)
 
     def score(epoch: int) -> float:
-        cases = build_cases(
-            scoring.sentences,
-            flagged_spans(first),
-            readings,
-            contexts,
-            source,
-            reader,
-            log=lambda _line: None,
-        )
+        cases = raw_cases(scoring.sentences, flagged_spans(first), readings, contexts, source)
         unfiltered = recall_row("proposer", cases)
         log(unfiltered_line(epoch, first, unfiltered))
         for tiers, pipeline in pipelines:
@@ -417,10 +422,24 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
             float,
             Parameter(help="Score where training sentences are flagged, false alarms included."),
         ] = FALSE_ALARM_POLICY.suggestion,
+        join: Annotated[
+            float | None,
+            Parameter(
+                help="Lowest score of a word next to a flag that the flag takes in, rising "
+                "by --rate for each word further; leave out to join only flagged slots."
+            ),
+        ] = None,
+        rate: Annotated[float, Parameter(help="How fast the bar for --join rises.")] = 2.0,
+        measured: Annotated[
+            Measured, Parameter(help="Score only the raw proposals, or the pipeline as well.")
+        ] = Measured.PIPELINE,
         device: str = "cuda",
         data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
     ) -> int:
-        """Train on the BEA-2019 W&I+LOCNESS and FCE training sets; save to OUTPUT."""
+        """Train on the BEA-2019 W&I+LOCNESS and FCE training sets; save to OUTPUT. Flags
+        for training and scoring both grow as --join and --rate say.
+        """
+        growth: Growth = Adjacent() if join is None else Falloff(join=join, rate=rate)
 
         def run() -> int:
             sentences: list[AnnotatedSentence] = []
@@ -445,9 +464,10 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
                     annotator,
                     tuple(gold[:scored]),
                     tuple(
-                        TierPolicy(error=max(USER_POLICY.error, at), suggestion=at)
+                        TierPolicy(error=max(USER_POLICY.error, at), suggestion=at, growth=growth)
                         for at in suggestion
                     ),
+                    measured,
                 )
             runtime.train(
                 sentences[:limit],
@@ -457,7 +477,9 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
                 synthetic=synthetic,
                 clean=read_texts(clean) if clean is not None else (),
                 false_alarms=TierPolicy(
-                    error=max(USER_POLICY.error, false_alarms), suggestion=false_alarms
+                    error=max(USER_POLICY.error, false_alarms),
+                    suggestion=false_alarms,
+                    growth=growth,
                 ),
                 scoring=scoring,
                 device=device,

@@ -73,17 +73,7 @@ def build_cases(
     log: Callable[[str], None],
 ) -> list[Case]:
     """A case for every span, with every distinct proposal read by the tagger."""
-    pending: list[tuple[int, WordSpan, tuple[Proposal, ...]]] = []
-    wanted = [(index, tuple(spans_of(index, readings[index]))) for index in range(len(sentences))]
-    wanted = [item for item in wanted if item[1]]
-    for begin in range(0, len(wanted), LOG_EVERY):
-        part = wanted[begin : begin + LOG_EVERY]
-        written = source.propose(
-            [ProposalRequest(sentences[i].tokens, contexts[i], spans) for i, spans in part]
-        )
-        for (index, spans), per_span in zip(part, written, strict=True):
-            pending += [(index, s, p) for s, p in zip(spans, per_span, strict=True)]
-        log(f"proposed for {begin + len(part)}/{len(wanted)} sentences")
+    pending = _proposed(sentences, spans_of, readings, contexts, source, log=log)
     keys: dict[tuple[str, ...], int] = {}
     owners: list[int] = []
     rows: list[list[tuple[str, float, int, int]]] = []
@@ -122,6 +112,66 @@ def build_cases(
             )
         )
     return cases
+
+
+def raw_cases(
+    sentences: Sequence[AnnotatedSentence],
+    spans_of: Callable[[int, SentenceReading], Sequence[WordSpan]],
+    readings: Sequence[SentenceReading],
+    contexts: Sequence[str],
+    source: ProposalSource,
+) -> list[Case]:
+    """A case for every span with the beam's proposals as written: nothing is read by the
+    tagger, so every drop is 0 and only the proposer's own order can be scored.
+    """
+    cases: list[Case] = []
+    for index, span, proposals in _proposed(
+        sentences, spans_of, readings, contexts, source, log=lambda _line: None
+    ):
+        sentence = sentences[index]
+        cases.append(
+            Case(
+                sentence=index,
+                answers=frozenset(normal("".join(words)) for words in references(sentence, span)),
+                false_alarm=is_false_alarm(sentence, span),
+                keep_first=bool(proposals) and proposals[0].keep,
+                proposals=tuple(
+                    Scored(
+                        proposal.text,
+                        proposal.log_probability,
+                        0.0,
+                        max(0, span.end - span.start - len(split_words(proposal.text))),
+                    )
+                    for proposal in proposals
+                    if not proposal.keep
+                ),
+            )
+        )
+    return cases
+
+
+def _proposed(
+    sentences: Sequence[AnnotatedSentence],
+    spans_of: Callable[[int, SentenceReading], Sequence[WordSpan]],
+    readings: Sequence[SentenceReading],
+    contexts: Sequence[str],
+    source: ProposalSource,
+    *,
+    log: Callable[[str], None],
+) -> list[tuple[int, WordSpan, tuple[Proposal, ...]]]:
+    """Each wanted span of each sentence with the proposals written for it."""
+    pending: list[tuple[int, WordSpan, tuple[Proposal, ...]]] = []
+    wanted = [(index, tuple(spans_of(index, readings[index]))) for index in range(len(sentences))]
+    wanted = [item for item in wanted if item[1]]
+    for begin in range(0, len(wanted), LOG_EVERY):
+        part = wanted[begin : begin + LOG_EVERY]
+        written = source.propose(
+            [ProposalRequest(sentences[i].tokens, contexts[i], spans) for i, spans in part]
+        )
+        for (index, spans), per_span in zip(part, written, strict=True):
+            pending += [(index, s, p) for s, p in zip(spans, per_span, strict=True)]
+        log(f"proposed for {begin + len(part)}/{len(wanted)} sentences")
+    return pending
 
 
 def flagged_spans(policy: TierPolicy) -> Callable[[int, SentenceReading], list[WordSpan]]:

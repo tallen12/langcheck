@@ -5,6 +5,7 @@ from pathlib import Path
 from langcheck.cli.proposing import (
     FAILED,
     EpochScoring,
+    Measured,
     RecallRow,
     epoch_score_line,
     proposer_app,
@@ -17,7 +18,7 @@ from langcheck.evaluation.m2 import AnnotatedSentence
 from langcheck.proposal.protocols import Proposal, ProposalRequest, ProposalSource
 from langcheck.tagging.models import SentenceReading, SlotScores
 from langcheck.tagging.protocols import SentenceReader
-from langcheck.tagging.tiers import TierPolicy
+from langcheck.tagging.tiers import Adjacent, Falloff, TierPolicy
 from tests.unit.cli.test_main import Cli
 
 M2 = """S He go home .
@@ -276,6 +277,51 @@ def test_training_scores_at_each_threshold_and_flags_from_false_alarms(tmp_path:
     assert scoring is not None
     assert [tiers.suggestion for tiers in scoring.tiers] == [0.3, 0.05]
     assert [policy.suggestion for policy in runtime.false_alarms] == [0.02]
+
+
+def test_falloff_grows_training_and_scoring_flags_and_proposals_can_be_scored_alone(
+    tmp_path: Path,
+) -> None:
+    write_sets(tmp_path, *TRAINING)
+    runtime = FakeRuntime()
+
+    code = run(
+        Cli(tmp_path),
+        runtime,
+        "train",
+        "out",
+        "--tagger",
+        "t",
+        "--data",
+        str(tmp_path),
+        "--join",
+        "0.1",
+        "--rate",
+        "3",
+        "--measured",
+        "proposals",
+    )
+
+    assert code == 0
+    [scoring] = runtime.scoring
+    assert scoring is not None
+    assert scoring.measured is Measured.PROPOSALS
+    assert [tiers.growth for tiers in scoring.tiers] == [Falloff(join=0.1, rate=3.0)]
+    assert [policy.growth for policy in runtime.false_alarms] == [Falloff(join=0.1, rate=3.0)]
+
+
+def test_flags_only_join_without_falloff_and_the_pipeline_is_scored_by_default(
+    tmp_path: Path,
+) -> None:
+    write_sets(tmp_path, *TRAINING)
+    runtime = FakeRuntime()
+
+    run(Cli(tmp_path), runtime, "train", "out", "--tagger", "t", "--data", str(tmp_path))
+
+    [scoring] = runtime.scoring
+    assert scoring is not None
+    assert scoring.measured is Measured.PIPELINE
+    assert [tiers.growth for tiers in scoring.tiers] == [Adjacent()]
 
 
 def test_training_defaults_to_the_user_and_false_alarm_thresholds(tmp_path: Path) -> None:
