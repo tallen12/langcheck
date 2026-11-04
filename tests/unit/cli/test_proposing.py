@@ -9,6 +9,7 @@ from langcheck.cli.proposing import (
     epoch_score_line,
     proposer_app,
     render_rows,
+    unfiltered_line,
 )
 from langcheck.correction.measure import CorrectionReport, Strategy, StrategyRow
 from langcheck.evaluation.datasets import Dataset, dataset_files
@@ -132,9 +133,10 @@ def test_measure_reports_recall_and_saves_it(tmp_path: Path) -> None:
 
 
 def test_rows_render_each_cutoff() -> None:
-    row = RecallRow(scoring="x", cases=1, recall={1: 0.5}, deletions_first=0.0)
+    row = RecallRow(scoring="x", cases=1, recall={1: 0.5}, mrr=0.25, deletions_first=0.0)
 
     assert "@1 0.500" in render_rows([row])
+    assert "MRR 0.250" in render_rows([row])
 
 
 def test_training_passes_on_synthetic_copies(tmp_path: Path) -> None:
@@ -169,6 +171,7 @@ def test_training_scores_on_bea19_dev_sentences(tmp_path: Path) -> None:
     assert scoring is not None
     assert scoring.dataset == "bea19-dev"
     assert [example.source for example in scoring.examples] == [("He", "go", "home", ".")]
+    assert [sentence.tokens for sentence in scoring.sentences] == [("He", "go", "home", ".")]
 
 
 def test_training_without_scoring_needs_no_dev_set(tmp_path: Path) -> None:
@@ -202,7 +205,13 @@ def test_training_without_the_dev_set_fails(tmp_path: Path) -> None:
     assert "evaluate fetch bea19-dev" in "".join(cli.err)
 
 
-def test_epoch_score_line_shows_the_tagger_ranked_scores() -> None:
+def test_epoch_score_line_shows_the_tagger_ranked_scores_then_ranking() -> None:
+    recalls = {
+        Strategy.TAGGER_RANKED: 0.25,
+        Strategy.BEST_OF_3: 0.5,
+        Strategy.BEST_OF_5: 0.625,
+        Strategy.BEST_OFFERED: 0.75,
+    }
     rows = [
         StrategyRow(
             strategy=strategy,
@@ -210,7 +219,7 @@ def test_epoch_score_line_shows_the_tagger_ranked_scores() -> None:
             fp=1,
             fn=3,
             precision=0.5,
-            recall=0.25 if strategy is Strategy.TAGGER_RANKED else 0.0,
+            recall=recalls.get(strategy, 0.0),
             f05=0.4167,
             needed=4,
             gain=1,
@@ -224,6 +233,7 @@ def test_epoch_score_line_shows_the_tagger_ranked_scores() -> None:
         flags=2,
         unavailable=0,
         no_corrections=0,
+        mrr=0.4,
         strategies=rows,
         fates=[],
         order=[],
@@ -234,7 +244,8 @@ def test_epoch_score_line_shows_the_tagger_ranked_scores() -> None:
 
     assert line == (
         "epoch 3: bea19-dev 2 sentences, flags from 0.05, tagger-ranked precision 0.500 "
-        "recall 0.250 F0.5 0.4167 gain 1/4"
+        "recall 0.250 F0.5 0.4167 gain 1/4, MRR 0.400, recall in top 3 0.500 top 5 0.625 "
+        "any 0.750"
     )
 
 
@@ -277,3 +288,16 @@ def test_training_defaults_to_the_user_and_false_alarm_thresholds(tmp_path: Path
     assert scoring is not None
     assert [tiers.suggestion for tiers in scoring.tiers] == [0.3]
     assert [policy.suggestion for policy in runtime.false_alarms] == [0.1]
+
+
+def test_unfiltered_line_shows_the_mrr_and_recall_at_each_cutoff() -> None:
+    row = RecallRow(
+        scoring="proposer", cases=7, recall={1: 0.5, 16: 0.75}, mrr=0.6, deletions_first=0.0
+    )
+
+    line = unfiltered_line(2, TierPolicy(), row)
+
+    assert line == (
+        "epoch 2: unfiltered proposals at flags from 0.30, 7 spans with an error, MRR 0.600, "
+        "recall @1 0.500 @16 0.750"
+    )

@@ -60,23 +60,43 @@ type Guard = Callable[[Callable[[], int]], int]
 
 @dataclass(frozen=True, slots=True)
 class EpochScoring:
-    """Sentences the whole correction pipeline corrects after each epoch, for its F0.5."""
+    """Sentences scored after each epoch: the proposer's own proposals at the flags, then
+    the whole correction pipeline's corrections.
+    """
 
     dataset: str
     examples: tuple[Example, ...]
     annotator: EditAnnotator
+    sentences: tuple[AnnotatedSentence, ...]
+    """The same sentences with their gold edits, for the proposals before any filter."""
     tiers: tuple[TierPolicy, ...] = (USER_POLICY,)
-    """Each is scored on its own, to compare where flagging begins."""
+    """Each is scored on its own, to compare where flagging begins. The first chooses the
+    epoch kept: the one whose proposals, before reranking or filtering, put a right answer
+    highest (MRR). Training targets the right answer first; the filters come afterwards."""
+
+
+def unfiltered_line(epoch: int, tiers: TierPolicy, row: RecallRow) -> str:
+    """One epoch's proposals at the flags, in the proposer's own order, before filtering."""
+    cells = " ".join(f"@{k} {v:.3f}" for k, v in row.recall.items())
+    return (
+        f"epoch {epoch}: unfiltered proposals at flags from {tiers.suggestion:.2f}, "
+        f"{row.cases} spans with an error, MRR {row.mrr:.3f}, recall {cells}"
+    )
 
 
 def epoch_score_line(epoch: int, tiers: TierPolicy, report: CorrectionReport) -> str:
-    """One epoch's scores in the order ``langcheck suggest`` offers corrections."""
-    row = next(row for row in report.strategies if row.strategy is Strategy.TAGGER_RANKED)
+    """One epoch's scores in the order ``langcheck suggest`` offers corrections, then how
+    far down the offered list the right answers sit.
+    """
+    rows = {row.strategy: row for row in report.strategies}
+    row = rows[Strategy.TAGGER_RANKED]
     return (
         f"epoch {epoch}: {report.dataset} {report.sentences} sentences, flags from "
         f"{tiers.suggestion:.2f}, tagger-ranked "
         f"precision {row.precision:.3f} recall {row.recall:.3f} F0.5 {row.f05:.4f} "
-        f"gain {row.gain}/{row.needed}"
+        f"gain {row.gain}/{row.needed}, MRR {report.mrr:.3f}, recall in top 3 "
+        f"{rows[Strategy.BEST_OF_3].recall:.3f} top 5 {rows[Strategy.BEST_OF_5].recall:.3f} "
+        f"any {rows[Strategy.BEST_OFFERED].recall:.3f}"
     )
 
 
@@ -132,8 +152,11 @@ def _epoch_scorer(
     proposer: TokenProposer,
     device: torch.device,
     log: Callable[[str], None],
-) -> Callable[[int], None]:
-    """Logs the F0.5 of ``langcheck suggest --proposer`` with ``proposer`` as it is then."""
+) -> Callable[[int], float]:
+    """Logs how ``proposer``, as it is then, ranks right answers before any filter, and the
+    scores of ``langcheck suggest --proposer``; gives the unfiltered MRR under the first
+    tiers.
+    """
     from langcheck.correction.measure import measure, suggest_all
     from langcheck.correction.models import CorrectionPolicy
     from langcheck.correction.pipeline import CorrectionPipeline
@@ -164,13 +187,29 @@ def _epoch_scorer(
         for tiers in scoring.tiers
     ]
     texts = [example.text for example in scoring.examples]
+    first = scoring.tiers[0]
+    contexts = contexts_of(scoring.sentences, loaded.info.context_sentences)
+    # The tagger is frozen, so it reads the sentences once for every epoch.
+    readings = reader.read([s.tokens for s in scoring.sentences], contexts=contexts)
 
-    def score(epoch: int) -> None:
+    def score(epoch: int) -> float:
+        cases = build_cases(
+            scoring.sentences,
+            flagged_spans(first),
+            readings,
+            contexts,
+            source,
+            reader,
+            log=lambda _line: None,
+        )
+        unfiltered = recall_row("proposer", cases)
+        log(unfiltered_line(epoch, first, unfiltered))
         for tiers, pipeline in pipelines:
             # One sentence at a time: the reader and the proposer share the model, unlocked.
             found = asyncio.run(suggest_all(pipeline, texts, concurrency=1, log=lambda _line: None))
             report = measure(scoring.examples, found, scoring.annotator, dataset=scoring.dataset)
             log(epoch_score_line(epoch, tiers, report))
+        return unfiltered.mrr
 
     return score
 
@@ -205,7 +244,13 @@ class TransformerProposerRuntime:
         )
         from langcheck.proposal.model import TokenProposer
         from langcheck.proposal.stores import MappedFileStore
-        from langcheck.proposal.training import ProposerItem, ProposerOptions, train_proposer
+        from langcheck.proposal.training import (
+            HighestScore,
+            LowestLoss,
+            ProposerItem,
+            ProposerOptions,
+            train_proposer,
+        )
         from langcheck.tagging.checkpoint import load_checkpoint
         from langcheck.tagging.loaded import torch_limit
         from langcheck.tagging.tiers import slot_flags
@@ -265,10 +310,10 @@ class TransformerProposerRuntime:
                 options=ProposerOptions(epochs=epochs),
                 log=log,
                 store=MappedFileStore(Path(states)),
-                after_epoch=(
-                    (lambda _epoch: None)
+                choice=(
+                    LowestLoss()
                     if scoring is None
-                    else _epoch_scorer(scoring, loaded, reader, proposer, target, log)
+                    else HighestScore(_epoch_scorer(scoring, loaded, reader, proposer, target, log))
                 ),
             )
         save_proposer(
@@ -316,7 +361,8 @@ def render_rows(rows: Sequence[RecallRow]) -> str:
     for row in rows:
         cells = " ".join(f"@{k} {v:.3f}" for k, v in row.recall.items())
         lines.append(
-            f"{row.scoring:40} n={row.cases:5} {cells} deletions-first {row.deletions_first:.3f}"
+            f"{row.scoring:40} n={row.cases:5} {cells} MRR {row.mrr:.3f} "
+            f"deletions-first {row.deletions_first:.3f}"
         )
     return "\n".join(lines)
 
@@ -386,10 +432,14 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
                     env.err(f"langcheck: run `langcheck evaluate fetch {SCORED_SET.value}` first")
                     return FAILED
                 annotator = env.edit_annotators()
+                gold = read_set(SCORED_SET, data)
+                if gold is None:
+                    return FAILED
                 scoring = EpochScoring(
                     SCORED_SET.value,
                     tuple(load_examples(SCORED_SET, files, annotator, limit=scored)),
                     annotator,
+                    tuple(gold[:scored]),
                     tuple(
                         TierPolicy(error=max(USER_POLICY.error, at), suggestion=at)
                         for at in suggestion

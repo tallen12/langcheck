@@ -7,6 +7,8 @@ from langcheck.proposal.search import vocabulary
 from langcheck.proposal.stores import MemoryStore
 from langcheck.proposal.targets import Keep, Rewrite, WordSpan
 from langcheck.proposal.training import (
+    HighestScore,
+    LowestLoss,
     ProposerItem,
     ProposerOptions,
     _prepare,
@@ -50,6 +52,7 @@ def test_training_lowers_the_loss_and_leaves_the_tagger_alone(
         options=ProposerOptions(epochs=8, batch_size=4, learning_rate=1e-3, max_length=32),
         log=lines.append,
         store=MemoryStore(),
+        choice=LowestLoss(),
     )
     first = float(next(line for line in lines if "validation loss" in line).split()[-1])
 
@@ -72,6 +75,7 @@ def test_nothing_to_train_on_is_refused(tiny_tokenizer: PreTrainedTokenizerFast)
             options=ProposerOptions(max_length=32),
             log=lambda _: None,
             store=MemoryStore(),
+            choice=LowestLoss(),
         )
 
 
@@ -87,15 +91,20 @@ def test_no_epochs_is_refused(tiny_tokenizer: PreTrainedTokenizerFast) -> None:
             options=ProposerOptions(epochs=0, max_length=32),
             log=lambda _: None,
             store=MemoryStore(),
+            choice=LowestLoss(),
         )
 
 
-def test_after_epoch_runs_once_per_epoch_after_the_loss(
+def test_a_score_runs_once_per_epoch_after_the_loss_in_evaluation_mode(
     tiny_tokenizer: PreTrainedTokenizerFast,
 ) -> None:
     proposer = proposer_for(len(tiny_tokenizer))
     lines: list[str] = []
     seen: list[tuple[int, bool, str]] = []
+
+    def score(epoch: int) -> float:
+        seen.append((epoch, proposer.training, lines[-1]))
+        return 0.0
 
     train_proposer(
         tiny_tagger(tiny_tokenizer),
@@ -107,11 +116,41 @@ def test_after_epoch_runs_once_per_epoch_after_the_loss(
         options=ProposerOptions(epochs=2, batch_size=4, max_length=32),
         log=lines.append,
         store=MemoryStore(),
-        after_epoch=lambda epoch: seen.append((epoch, proposer.training, lines[-1])),
+        choice=HighestScore(score),
     )
 
     assert [(epoch, training) for epoch, training, _ in seen] == [(1, False), (2, False)]
     assert all(line.startswith(f"epoch {epoch}: validation loss") for epoch, _, line in seen)
+
+
+def test_the_highest_scored_epoch_is_kept_whatever_its_loss(
+    tiny_tokenizer: PreTrainedTokenizerFast,
+) -> None:
+    proposer = proposer_for(len(tiny_tokenizer))
+    states: dict[int, dict[str, torch.Tensor]] = {}
+    lines: list[str] = []
+
+    def score(epoch: int) -> float:
+        states[epoch] = {k: v.clone() for k, v in proposer.state_dict().items()}
+        return {1: 0.1, 2: 0.9, 3: 0.5}[epoch]
+
+    result = train_proposer(
+        tiny_tagger(tiny_tokenizer),
+        proposer,
+        tiny_tokenizer,
+        [ITEM] * 8,
+        [ITEM],
+        device=CPU,
+        options=ProposerOptions(epochs=3, batch_size=4, learning_rate=1e-3, max_length=32),
+        log=lines.append,
+        store=MemoryStore(),
+        choice=HighestScore(score),
+    )
+
+    assert (result.epoch, result.score) == (2, 0.9)
+    assert lines[-1] == "keeping epoch 2"
+    for name, value in proposer.state_dict().items():
+        assert torch.equal(value, states[2][name])
 
 
 def test_each_sentence_is_encoded_once_however_many_epochs(
@@ -135,6 +174,7 @@ def test_each_sentence_is_encoded_once_however_many_epochs(
         options=ProposerOptions(epochs=3, batch_size=4, max_length=32),
         log=lines.append,
         store=MemoryStore(),
+        choice=LowestLoss(),
     )
 
     assert sum(rows) == 10

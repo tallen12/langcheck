@@ -88,6 +88,7 @@ def test_strategies_choose_differently() -> None:
     assert row(result, Strategy.LLM_FIRST).tp == 0
     assert row(result, Strategy.FILTERED_FIRST).tp == 0
     assert row(result, Strategy.TAGGER_RANKED).tp == 0
+    assert row(result, Strategy.BEST_OF_3).tp == 1
     best = row(result, Strategy.BEST_OFFERED)
     assert (best.tp, best.fp, best.fn) == (1, 0, 0)
     assert best.share == 1.0
@@ -158,3 +159,29 @@ def test_suggest_all_keeps_order_and_logs_progress(
 
     assert [len(found) for found in outcomes[:2]] == [1, 0]
     assert logged == ["25/26 sentences"]
+
+
+def test_best_of_n_only_looks_at_the_first_n_offered() -> None:
+    wrong = [ranked(word, at, 0.1 * at) for at, word in enumerate(("goes", "gone", "going"))]
+    outcome = Corrected(FLAG, (*wrong, ranked("went", 3, 0.4)), ())
+
+    result = report(outcome)
+
+    assert row(result, Strategy.BEST_OF_3).tp == 0
+    assert row(result, Strategy.BEST_OF_5).tp == 1
+    assert result.mrr == 0.25
+
+
+def test_mrr_counts_flags_with_nothing_right_as_zero() -> None:
+    second = Corrected(FLAG, (ranked("goes", 0, 0.0), ranked("went", 1, 0.1)), ())
+    nothing = Corrected(FLAG, (ranked("goes", 0, 0.0),), ())
+
+    assert report(second, nothing, Unavailable(FLAG, "down")).mrr == 0.5 / 3
+    assert report().mrr == 0.0
+
+
+def test_render_shows_the_mrr() -> None:
+    text = render_measurement(report(Corrected(FLAG, (ranked("went", 0, 0.0),), ())))
+
+    assert "MRR of the first offered correction that helps: 1.000" in text
+    assert "best-of-3" in text

@@ -109,6 +109,7 @@ def test_recall_counts_unreachable_spans_and_skips_false_alarms() -> None:
     assert row.cases == 2
     assert row.recall[1] == 0.0
     assert row.recall[2] == 0.5
+    assert row.mrr == 0.25
 
 
 def test_tuning_finds_what_lifts_recall_and_prefers_no_change_on_a_tie() -> None:

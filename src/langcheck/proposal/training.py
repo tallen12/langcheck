@@ -1,9 +1,10 @@
-"""Training the proposer on the frozen tagger, keeping the epoch with the lowest loss."""
+"""Training the proposer on the frozen tagger, keeping its best epoch."""
 
 import copy
 import random
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import assert_never
 
 import torch
 from transformers import PreTrainedTokenizerBase
@@ -67,11 +68,29 @@ class _Cached:
 
 
 @dataclass(frozen=True, slots=True)
+class LowestLoss:
+    """Keep the epoch with the lowest validation loss."""
+
+
+@dataclass(frozen=True, slots=True)
+class HighestScore:
+    """Keep the epoch ``score`` rates highest, ties going to the earlier one. ``score``
+    gets each epoch's number once its loss is logged, with the proposer in evaluation mode.
+    """
+
+    score: Callable[[int], float]
+
+
+EpochChoice = LowestLoss | HighestScore
+
+
+@dataclass(frozen=True, slots=True)
 class ProposerResult:
-    """The best epoch and its validation loss."""
+    """The kept epoch, its validation loss and, when kept by score, its score."""
 
     epoch: int
     loss: float
+    score: float | None = None
 
 
 def _prepare(
@@ -182,12 +201,11 @@ def train_proposer(
     options: ProposerOptions,
     log: Callable[[str], None],
     store: StateStore,
-    after_epoch: Callable[[int], None] = lambda _epoch: None,
+    choice: EpochChoice,
 ) -> ProposerResult:
-    """Fit ``proposer``, which ends with its best epoch's weights; ``tagger`` never changes.
-    Its encoder states are computed once and kept in ``store`` for every epoch.
-    ``after_epoch`` gets each epoch's number once its loss is logged, with the proposer in
-    evaluation mode, to measure it in other ways.
+    """Fit ``proposer``, which ends with the weights of the epoch ``choice`` keeps;
+    ``tagger`` never changes. Its encoder states are computed once and kept in ``store``
+    for every epoch. Training always minimizes the loss; ``choice`` only picks the epoch.
     """
     torch.manual_seed(options.seed)
     shuffler = random.Random(options.seed)
@@ -218,6 +236,7 @@ def train_proposer(
         lambda step: min((step + 1) / warmup, max(0.0, (total - step) / max(1, total - warmup))),
     )
     best: ProposerResult | None = None
+    best_rating = 0.0
     best_state: Mapping[str, object] = {}
     for epoch in range(1, options.epochs + 1):
         proposer.train()
@@ -256,12 +275,21 @@ def train_proposer(
                 )
         mean = sum(losses) / len(losses)
         log(f"epoch {epoch}: validation loss {mean:.4f}")
-        after_epoch(epoch)
-        if best is None or mean < best.loss:
-            best = ProposerResult(epoch, mean)
+        match choice:
+            case LowestLoss():
+                found = ProposerResult(epoch, mean)
+                rating = -mean
+            case HighestScore(score=score):
+                rating = score(epoch)
+                found = ProposerResult(epoch, mean, rating)
+            case _:
+                assert_never(choice)
+        if best is None or rating > best_rating:
+            best, best_rating = found, rating
             best_state = copy.deepcopy(proposer.state_dict())
     if best is None:
         msg = f"epochs must be positive, got {options.epochs}"
         raise ValueError(msg)
     proposer.load_state_dict(best_state)
+    log(f"keeping epoch {best.epoch}")
     return best

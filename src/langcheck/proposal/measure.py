@@ -45,13 +45,16 @@ class Case:
 
 
 class RecallRow(BaseModel):
-    """Share of spans with a right answer in the top k, under one scoring."""
+    """Share of spans with a right answer in the top k, and the mean reciprocal rank of
+    the first right answer, under one scoring.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     scoring: str
     cases: int
     recall: dict[int, float]
+    mrr: float
     deletions_first: float
 
 
@@ -155,11 +158,12 @@ def ranked(case: Case, weight: float, penalty: float) -> list[Scored]:
 def recall_row(
     scoring: str, cases: Iterable[Case], *, weight: float = 0.0, penalty: float = 0.0
 ) -> RecallRow:
-    """Recall at each cutoff over ``cases``; unreachable spans count as misses, and false
-    alarms are left out.
+    """Recall at each cutoff and MRR over ``cases``; unreachable spans count as misses, and
+    false alarms are left out.
     """
     wanted = [case for case in cases if not case.false_alarm]
     hits = dict.fromkeys(CUTOFFS, 0)
+    reciprocal = 0.0
     deletions = 0
     for case in wanted:
         order = ranked(case, weight, penalty)
@@ -167,6 +171,7 @@ def recall_row(
         where = next(
             (at for at, s in enumerate(order, start=1) if normal(s.text) in case.answers), None
         )
+        reciprocal += 1 / where if where is not None else 0.0
         for cutoff in CUTOFFS:
             hits[cutoff] += where is not None and where <= cutoff
     size = max(1, len(wanted))
@@ -174,6 +179,7 @@ def recall_row(
         scoring=scoring,
         cases=len(wanted),
         recall={cutoff: hits[cutoff] / size for cutoff in CUTOFFS},
+        mrr=reciprocal / size,
         deletions_first=deletions / size,
     )
 
