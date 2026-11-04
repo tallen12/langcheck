@@ -19,6 +19,7 @@ from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.m2 import AnnotatedSentence
 from langcheck.settings.loading import ClientSettings, load_settings
 from langcheck.tagging.alignment import CharSpan
+from langcheck.tagging.selection import EpochChoice
 from langcheck.tagging.tiers import FlagKind, TextFlag, Tier
 from tests.conftest import WordTableTagger
 from tests.unit.cli.test_main import Cli
@@ -36,6 +37,7 @@ class WordTableRuntime:
         epochs: int,
         batch_size: int,
         precision: float,
+        choice: EpochChoice,
         context_sentences: int,
         synthetic: int,
         clean: Sequence[str],

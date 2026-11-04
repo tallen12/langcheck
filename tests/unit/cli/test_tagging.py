@@ -19,7 +19,8 @@ from langcheck.evaluation.m2 import AnnotatedSentence
 from langcheck.tagging.alignment import CharSpan
 from langcheck.tagging.models import SlotScores
 from langcheck.tagging.protocols import GapCommaScorer
-from langcheck.tagging.tiers import FlagKind, TextFlag, Tier
+from langcheck.tagging.selection import ByFlags, BySlots, EpochChoice
+from langcheck.tagging.tiers import Falloff, FlagKind, TextFlag, Tier, TierPolicy
 from tests.unit.cli.test_main import Cli
 
 M2 = """S He go home .
@@ -47,6 +48,7 @@ class OnlySecondWord:
 class FakeRuntime:
     trained_on: list[int] = field(default_factory=list)
     context: list[int] = field(default_factory=list)
+    choices: list[EpochChoice] = field(default_factory=list)
     commas: GapCommaScorer | None = None
     comma_runs: list[tuple[str, int, str]] = field(default_factory=list)
 
@@ -59,6 +61,7 @@ class FakeRuntime:
         epochs: int,
         batch_size: int,
         precision: float,
+        choice: EpochChoice,
         context_sentences: int,
         synthetic: int,
         clean: Sequence[str],
@@ -66,6 +69,7 @@ class FakeRuntime:
         log: Callable[[str], None],
     ) -> None:
         self.trained_on.append(len(sentences))
+        self.choices.append(choice)
         self.context.append(context_sentences)
         log(f"{base_model} {epochs} {batch_size} {precision} {device} {output.name}")
 
@@ -106,6 +110,20 @@ def test_train_reads_both_training_sets(tmp_path: Path) -> None:
 
     assert runtime.trained_on == [4]
     assert "roberta-large 3 16 0.5 cpu out" in cli.output
+
+
+def test_train_keeps_the_best_slot_recall_unless_judged_by_flags(tmp_path: Path) -> None:
+    write(tmp_path, Dataset.BEA19_TRAIN)
+    write(tmp_path, Dataset.FCE_TRAIN)
+    runtime = FakeRuntime()
+
+    run(Cli(tmp_path), runtime, "train", "out")
+    run(Cli(tmp_path), runtime, "train", "out", "--flags-from", "0.3", "--join", "0.1")
+
+    assert runtime.choices == [
+        BySlots(),
+        ByFlags(TierPolicy(suggestion=0.3, growth=Falloff(join=0.1, rate=2.0))),
+    ]
 
 
 def test_train_can_read_preceding_sentences(tmp_path: Path) -> None:
@@ -273,6 +291,7 @@ def test_too_few_sentences_for_validation_are_refused(
             epochs=1,
             batch_size=1,
             precision=0.5,
+            choice=BySlots(),
             context_sentences=0,
             synthetic=0,
             clean=(),

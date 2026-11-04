@@ -23,8 +23,9 @@ from langcheck.tagging.document import flag_text
 from langcheck.tagging.loaded import Trained, load_trained, torch_limit
 from langcheck.tagging.metrics import ScoredSentence
 from langcheck.tagging.report import build_report, render_report
+from langcheck.tagging.selection import ByFlags, BySlots, EpochChoice
 from langcheck.tagging.tier_report import TierSentence, measure_tiers, render_tiers
-from langcheck.tagging.tiers import FlagKind, TextFlag, TierPolicy
+from langcheck.tagging.tiers import Adjacent, Falloff, FlagKind, Growth, TextFlag, TierPolicy
 
 CLEAN = 0
 FAILED = 2
@@ -53,6 +54,7 @@ class TaggerRuntime(Protocol):
         epochs: int,
         batch_size: int,
         precision: float,
+        choice: EpochChoice,
         context_sentences: int,
         synthetic: int,
         clean: Sequence[str],
@@ -90,6 +92,7 @@ class TransformerRuntime:
         epochs: int,
         batch_size: int,
         precision: float,
+        choice: EpochChoice,
         context_sentences: int,
         synthetic: int,
         clean: Sequence[str],
@@ -105,7 +108,9 @@ class TransformerRuntime:
         from langcheck.tagging.model import SlotTagger
         from langcheck.tagging.training import InContext, TrainingOptions, split_holdout, train
 
-        options = TrainingOptions(epochs=epochs, batch_size=batch_size, precision=precision)
+        options = TrainingOptions(
+            epochs=epochs, batch_size=batch_size, precision=precision, choice=choice
+        )
         target = torch.device(device)
         torch_limit(target)
         tokenizer = load_tokenizer(base_model)
@@ -220,6 +225,18 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
         epochs: int = 3,
         batch_size: int = 16,
         precision: Annotated[float, Parameter(help="Precision to choose a threshold at.")] = 0.5,
+        flags_from: Annotated[
+            float | None,
+            Parameter(
+                help="Keep the epoch whose flags from this score have the best F0.5 of "
+                "precision and edits inside a flag; leave out to keep the best slot recall."
+            ),
+        ] = None,
+        join: Annotated[
+            float | None,
+            Parameter(help="With --flags-from, grow flags by a falloff from this score."),
+        ] = None,
+        rate: Annotated[float, Parameter(help="How fast the bar for --join rises.")] = 2.0,
         limit: Annotated[int | None, Parameter(help="Only the first N sentences.")] = None,
         context: Annotated[int, Parameter(help="Preceding sentences to read.")] = 0,
         synthetic: Annotated[
@@ -232,6 +249,18 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
         data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
     ) -> int:
         """Fine-tune on the BEA-2019 W&I+LOCNESS and FCE training sets; save to OUTPUT."""
+        growth: Growth = Adjacent() if join is None else Falloff(join=join, rate=rate)
+        choice: EpochChoice = (
+            BySlots()
+            if flags_from is None
+            else ByFlags(
+                TierPolicy(
+                    error=max(DEFAULT_POLICY.error, flags_from),
+                    suggestion=flags_from,
+                    growth=growth,
+                )
+            )
+        )
 
         def run() -> int:
             sentences: list[AnnotatedSentence] = []
@@ -248,6 +277,7 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
                 epochs=epochs,
                 batch_size=batch_size,
                 precision=precision,
+                choice=choice,
                 context_sentences=context,
                 synthetic=synthetic,
                 clean=read_texts(clean) if clean is not None else (),
