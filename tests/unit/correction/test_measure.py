@@ -12,6 +12,7 @@ from langcheck.correction.measure import (
     measure,
     render_measurement,
     suggest_all,
+    suggest_batched,
 )
 from langcheck.correction.models import (
     Candidate,
@@ -185,3 +186,27 @@ def test_render_shows_the_mrr() -> None:
 
     assert "MRR of the first offered correction that helps: 1.000" in text
     assert "best-of-3" in text
+
+
+def test_suggest_batched_keeps_order_and_logs_each_batch(
+    scripted_llm: Callable[[Sequence[str | LLMError | Responder]], ScriptedLLM],
+) -> None:
+    pipeline = CorrectionPipeline(
+        corrector=LlmCorrector(
+            scripted_llm([json.dumps({"flags": []})] * 3), CorrectionPolicy(), ChatOptions()
+        ),
+        reader=PairedReader(WordTableTagger({"go": 0.9})),
+        tiers=TierPolicy(),
+        policy=CorrectionPolicy(),
+        context_sentences=0,
+    )
+    logged: list[str] = []
+
+    outcomes = asyncio.run(
+        suggest_batched(
+            pipeline, ["He go.", "Fine.", "Fine.", "He go.", "He go."], batch=2, log=logged.append
+        )
+    )
+
+    assert [len(found) for found in outcomes] == [1, 0, 0, 1, 1]
+    assert logged == ["2/5 sentences", "4/5 sentences", "5/5 sentences"]

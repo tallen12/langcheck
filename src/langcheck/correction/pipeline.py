@@ -36,9 +36,21 @@ class CorrectionPipeline:
 
     async def suggest_sentences(self, sentences: Sequence[SentenceInText]) -> list[FlagOutcome]:
         """An outcome for every flag of ``sentences``, in order."""
+        return [outcome for found in await self._per_sentence(sentences) for outcome in found]
+
+    async def suggest_texts(self, texts: Sequence[str]) -> list[list[FlagOutcome]]:
+        """For each of ``texts``, an outcome for every flag, in reading order. All their
+        sentences are read and corrected together, so the models see large batches.
+        """
+        groups = [read_sentences(text, self.context_sentences) for text in texts]
+        found = iter(await self._per_sentence([s for group in groups for s in group]))
+        return [[outcome for _ in group for outcome in next(found)] for group in groups]
+
+    async def _per_sentence(self, sentences: Sequence[SentenceInText]) -> list[list[FlagOutcome]]:
         flagged = await asyncio.to_thread(self._flag, sentences)
-        answers = await self.corrector.correct(flagged)
-        pending = [item for answer in answers for item in answer if isinstance(item, Pending)]
+        answers = iter(await self.corrector.correct([f for f in flagged if f is not None]))
+        per_sentence = [[] if f is None else list(next(answers)) for f in flagged]
+        pending = [item for answer in per_sentence for item in answer if isinstance(item, Pending)]
         corrected = iter(
             await asyncio.to_thread(
                 rank_corrections,
@@ -49,12 +61,12 @@ class CorrectionPipeline:
             )
         )
         return [
-            next(corrected) if isinstance(item, Pending) else item
-            for answer in answers
-            for item in answer
+            [next(corrected) if isinstance(item, Pending) else item for item in answer]
+            for answer in per_sentence
         ]
 
-    def _flag(self, sentences: Sequence[SentenceInText]) -> list[FlaggedSentence]:
+    def _flag(self, sentences: Sequence[SentenceInText]) -> list[FlaggedSentence | None]:
+        """Each sentence with its flags, or ``None`` when it has none."""
         flagged = flag_sentences(
             [s.text for s in sentences],
             [s.context for s in sentences],
@@ -63,6 +75,7 @@ class CorrectionPipeline:
         )
         return [
             FlaggedSentence(sentence, tuple(in_text(flag, sentence.span.start) for flag in flags))
-            for sentence, flags in zip(sentences, flagged, strict=True)
             if flags
+            else None
+            for sentence, flags in zip(sentences, flagged, strict=True)
         ]

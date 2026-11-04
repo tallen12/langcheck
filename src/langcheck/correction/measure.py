@@ -152,6 +152,23 @@ async def suggest_all(
     return list(await asyncio.gather(*(one(text) for text in texts)))
 
 
+async def suggest_batched(
+    pipeline: CorrectionPipeline,
+    texts: Sequence[str],
+    *,
+    batch: int,
+    log: Callable[[str], None],
+) -> list[list[FlagOutcome]]:
+    """The pipeline's outcomes for each of ``texts``, in order, ``batch`` texts at a time
+    corrected together: for a local corrector, whose models gain from large batches.
+    """
+    found: list[list[FlagOutcome]] = []
+    for begin in range(0, len(texts), batch):
+        found += await pipeline.suggest_texts(texts[begin : begin + batch])
+        log(f"{len(found)}/{len(texts)} sentences")
+    return found
+
+
 def apply_all(text: str, candidates: Iterable[Candidate]) -> str:
     """``text`` with ``candidates`` applied; of overlapping ones, the first in the text."""
     pieces: list[str] = []

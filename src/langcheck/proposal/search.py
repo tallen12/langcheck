@@ -72,53 +72,84 @@ def beam_search(
     """For each case (a row of ``states``, with ``mask`` true where a state is real), the
     best finished subwords, without start and end, with log probabilities, best first.
 
-    Every live hypothesis has the same length at each step, so all cases advance together.
+    Every live hypothesis has the same length at each step, so all cases advance together
+    as tensors on ``states``' device: each hypothesis keeps its ``width`` likeliest next
+    subwords, those ending it finish, and each case keeps its ``width`` best of the rest.
+    Only what finishes is copied back. A dead hypothesis scores minus infinity.
     """
     device = states.device
-    finished: list[list[tuple[tuple[int, ...], float]]] = [[] for _ in range(states.size(0))]
-    beams: list[list[tuple[tuple[int, ...], float]]] = [
-        [((tokens.start,), 0.0)] for _ in range(states.size(0))
-    ]
+    cases = states.size(0)
+    finished: list[list[tuple[tuple[int, ...], float]]] = [[] for _ in range(cases)]
+    written = torch.full((cases, 1, 1), tokens.start, dtype=torch.long, device=device)
+    scores = torch.zeros(cases, 1, device=device)
+    banned = torch.tensor(tokens.banned, dtype=torch.long, device=device)
+    top = min(width, embeddings.size(0))
     for step in range(1, MAX_TARGET):
         if step == 2:
             # A keep is whole: it ends here, and only here.
-            for case, beam in enumerate(beams):
-                finished[case] += [((tokens.keep,), s) for w, s in beam if w[-1] == tokens.keep]
-                beams[case] = [(w, s) for w, s in beam if w[-1] != tokens.keep]
-        live = [(case, *item) for case, beam in enumerate(beams) for item in beam]
-        if not live:
+            kept = (written[:, :, -1] == tokens.keep) & scores.isfinite()
+            _finish(finished, kept, written[:, :, 1:], scores)
+            scores = scores.masked_fill(kept, -torch.inf)
+        if not bool(scores.isfinite().any()):
             break
-        tops: list[torch.Tensor] = []
-        picks: list[torch.Tensor] = []
-        for begin in range(0, len(live), chunk):
-            part = live[begin : begin + chunk]
-            cases = torch.tensor([case for case, _, _ in part], dtype=torch.long, device=device)
+        beam = written.size(1)
+        flat = written.reshape(cases * beam, -1)
+        owner = torch.arange(cases, device=device).repeat_interleave(beam)
+        values = torch.full((cases * beam, top), -torch.inf, device=device)
+        picks = torch.zeros((cases * beam, top), dtype=torch.long, device=device)
+        alive = scores.reshape(-1).isfinite().nonzero().squeeze(1)
+        for begin in range(0, alive.size(0), chunk):
+            rows = alive[begin : begin + chunk]
+            of = owner[rows]
             logits = proposer.next_logits(
-                states[cases],
-                mask[cases],
-                segments[cases],
-                torch.tensor([written for _, written, _ in part], dtype=torch.long, device=device),
-                embeddings,
-            )
-            logits[:, list(tokens.banned)] = -torch.inf
+                states[of], mask[of], segments[of], flat[rows], embeddings
+            ).to(device)
+            logits[:, banned] = -torch.inf
             if step > 1:
                 logits[:, tokens.keep] = -torch.inf
-            top, pick = torch.log_softmax(logits, dim=-1).topk(min(width, logits.size(-1)), dim=-1)
-            tops.append(top.cpu())
-            picks.append(pick.cpu())
-        values = torch.cat(tops).tolist()
-        indices = torch.cat(picks).tolist()
-        pools: list[list[tuple[tuple[int, ...], float]]] = [[] for _ in beams]
-        for (case, written, total), row_values, row_indices in zip(
-            live, values, indices, strict=True
-        ):
-            for value, index in zip(row_values, row_indices, strict=True):
-                if index == tokens.end:
-                    finished[case].append((written[1:], total + value))
-                else:
-                    pools[case].append(((*written, index), total + value))
-        beams = [sorted(pool, key=lambda i: i[1], reverse=True)[:width] for pool in pools]
+            values[rows], picks[rows] = torch.log_softmax(logits, dim=-1).topk(top, dim=-1)
+        totals = (scores.reshape(-1, 1) + values).view(cases, beam, top)
+        picks = picks.view(cases, beam, top)
+        ends = picks == tokens.end
+        _finish_choices(finished, ends & totals.isfinite(), written[:, :, 1:], totals)
+        pool = totals.masked_fill(ends, -torch.inf).view(cases, beam * top)
+        scores, chosen = pool.topk(min(width, beam * top), dim=-1)
+        parents = written.gather(1, (chosen // top).unsqueeze(-1).expand(-1, -1, written.size(2)))
+        written = torch.cat(
+            [parents, picks.view(cases, beam * top).gather(1, chosen)[..., None]], 2
+        )
     return [sorted(found, key=lambda i: i[1], reverse=True) for found in finished]
+
+
+def _finish(
+    finished: list[list[tuple[tuple[int, ...], float]]],
+    where: torch.Tensor,
+    written: torch.Tensor,
+    scores: torch.Tensor,
+) -> None:
+    """Add each hypothesis ``where`` marks (cases by beam), as written, to its case."""
+    cases, beams = where.nonzero(as_tuple=True)
+    for case, ids, score in zip(
+        cases.tolist(), written[cases, beams].tolist(), scores[cases, beams].tolist(), strict=True
+    ):
+        finished[case].append((tuple(ids), score))
+
+
+def _finish_choices(
+    finished: list[list[tuple[tuple[int, ...], float]]],
+    where: torch.Tensor,
+    written: torch.Tensor,
+    totals: torch.Tensor,
+) -> None:
+    """Add each hypothesis whose choice ``where`` marks (cases by beam by choice) ends it."""
+    cases, beams, choices = where.nonzero(as_tuple=True)
+    for case, ids, score in zip(
+        cases.tolist(),
+        written[cases, beams].tolist(),
+        totals[cases, beams, choices].tolist(),
+        strict=True,
+    ):
+        finished[case].append((tuple(ids), score))
 
 
 class BeamProposer:

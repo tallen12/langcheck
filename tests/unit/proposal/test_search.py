@@ -3,9 +3,15 @@ from typing import override
 import torch
 from transformers import PreTrainedTokenizerFast
 
-from langcheck.proposal.model import ProposerShape, TokenProposer
+from langcheck.proposal.model import MAX_TARGET, ProposerShape, TokenProposer
 from langcheck.proposal.protocols import ProposalRequest
-from langcheck.proposal.search import BeamProposer, beam_search, target_ids, vocabulary
+from langcheck.proposal.search import (
+    BeamProposer,
+    Vocabulary,
+    beam_search,
+    target_ids,
+    vocabulary,
+)
 from langcheck.proposal.targets import WordSpan
 from tests.unit.tagging.test_model import tiny_tagger
 
@@ -125,3 +131,68 @@ def test_proposals_are_distinct_limited_and_skip_spans_past_the_limit(
     assert len({(p.text, p.keep) for p in near}) == len(near)
     assert far == ()
     assert gap
+
+
+def one_at_a_time(
+    proposer: TokenProposer,
+    states: torch.Tensor,
+    mask: torch.Tensor,
+    segments: torch.Tensor,
+    embeddings: torch.Tensor,
+    tokens: Vocabulary,
+    width: int,
+) -> list[list[tuple[tuple[int, ...], float]]]:
+    """The search written plainly, hypothesis by hypothesis, to check the batched one."""
+    finished: list[list[tuple[tuple[int, ...], float]]] = [[] for _ in range(states.size(0))]
+    beams: list[list[tuple[tuple[int, ...], float]]] = [
+        [((tokens.start,), 0.0)] for _ in range(states.size(0))
+    ]
+    for step in range(1, MAX_TARGET):
+        if step == 2:
+            for case, beam in enumerate(beams):
+                finished[case] += [((tokens.keep,), s) for w, s in beam if w[-1] == tokens.keep]
+                beams[case] = [(w, s) for w, s in beam if w[-1] != tokens.keep]
+        pools: list[list[tuple[tuple[int, ...], float]]] = [[] for _ in beams]
+        for case, beam in enumerate(beams):
+            for written, total in beam:
+                logits = proposer.next_logits(
+                    states[case : case + 1],
+                    mask[case : case + 1],
+                    segments[case : case + 1],
+                    torch.tensor([written]),
+                    embeddings,
+                )[0]
+                logits[list(tokens.banned)] = -torch.inf
+                if step > 1:
+                    logits[tokens.keep] = -torch.inf
+                values, indices = torch.log_softmax(logits, dim=-1).topk(width)
+                for value, index in zip(values.tolist(), indices.tolist(), strict=True):
+                    if index == tokens.end:
+                        finished[case].append((written[1:], total + value))
+                    else:
+                        pools[case].append(((*written, index), total + value))
+        beams = [sorted(pool, key=lambda i: i[1], reverse=True)[:width] for pool in pools]
+    return [sorted(found, key=lambda i: i[1], reverse=True) for found in finished]
+
+
+def test_batched_search_finds_what_searching_hypothesis_by_hypothesis_does(
+    tiny_tokenizer: PreTrainedTokenizerFast,
+) -> None:
+    tokens = vocabulary(tiny_tokenizer)
+    proposer = real_proposer(len(tiny_tokenizer))
+    torch.manual_seed(1)
+    embeddings = torch.rand(len(tiny_tokenizer), 16)
+    states = torch.rand(2, 5, 16)
+    mask = torch.tensor([[True] * 5, [True] * 3 + [False] * 2])
+    segments = torch.tensor([[0, 1, 1, 0, 0], [0, 2, 2, 0, 0]])
+
+    with torch.inference_mode():
+        batched = beam_search(
+            proposer, states, mask, segments, embeddings, tokens, width=4, chunk=3
+        )
+        plain = one_at_a_time(proposer, states, mask, segments, embeddings, tokens, 4)
+
+    for found, expected in zip(batched, plain, strict=True):
+        assert [ids for ids, _ in found] == [ids for ids, _ in expected]
+        for (_, first), (_, second) in zip(found, expected, strict=True):
+            assert abs(first - second) < 1e-4

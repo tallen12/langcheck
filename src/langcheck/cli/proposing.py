@@ -53,6 +53,8 @@ FALSE_ALARM_POLICY = TierPolicy(suggestion=0.1)
 USER_POLICY = TierPolicy()
 SCORED_SET = Dataset.BEA19_DEV
 SCORED_SENTENCES = 500
+SCORED_BATCH = 64
+"""Texts corrected together when scoring an epoch."""
 """The first 500 BEA-2019 dev sentences are what earlier proposers were compared on."""
 
 type Guard = Callable[[Callable[[], int]], int]
@@ -157,7 +159,7 @@ def _epoch_scorer(
     scores of ``langcheck suggest --proposer``; gives the unfiltered MRR under the first
     tiers.
     """
-    from langcheck.correction.measure import measure, suggest_all
+    from langcheck.correction.measure import measure, suggest_batched
     from langcheck.correction.models import CorrectionPolicy
     from langcheck.correction.pipeline import CorrectionPipeline
     from langcheck.proposal.corrector import ProposerCorrector, proposer_policy
@@ -205,8 +207,10 @@ def _epoch_scorer(
         unfiltered = recall_row("proposer", cases)
         log(unfiltered_line(epoch, first, unfiltered))
         for tiers, pipeline in pipelines:
-            # One sentence at a time: the reader and the proposer share the model, unlocked.
-            found = asyncio.run(suggest_all(pipeline, texts, concurrency=1, log=lambda _line: None))
+            # One batch at a time: the reader and the proposer share the model, unlocked.
+            found = asyncio.run(
+                suggest_batched(pipeline, texts, batch=SCORED_BATCH, log=lambda _line: None)
+            )
             report = measure(scoring.examples, found, scoring.annotator, dataset=scoring.dataset)
             log(epoch_score_line(epoch, tiers, report))
         return unfiltered.mrr
