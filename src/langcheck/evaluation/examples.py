@@ -34,28 +34,35 @@ class Example:
 
 
 class CorrectedPair(BaseModel):
-    """One line of a corrections file; other fields on the line are ignored."""
+    """One line of a corrections file; other fields on the line are ignored.
+
+    ``alternatives`` are further acceptable corrections, scored as other annotators.
+    """
 
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     text: str
     corrected: str
+    alternatives: tuple[str, ...] = ()
 
 
 def load_corrected_pairs(
     path: Path, annotator: EditAnnotator, *, limit: int | None = None
 ) -> list[Example]:
-    """The first ``limit`` lines of a JSONL file of ``text`` and its ``corrected`` form, one
-    reference each. The text stays as written; a line whose two forms agree has nothing to
-    correct, so any edit to it counts against the checker.
+    """The first ``limit`` lines of a JSONL file of ``text`` and its ``corrected`` form,
+    plus any ``alternatives``, one reference each. The text stays as written; a line whose
+    two forms agree has nothing to correct, so any edit to it counts against the checker.
     """
     lines = [line for line in _lines(path) if line.strip()][:limit]
     examples: list[Example] = []
     for line in lines:
         pair = CorrectedPair.model_validate_json(line)
         tokens = tuple(annotator.tokenize(pair.text))
-        edits = annotator.reference_edits(tokens, annotator.tokenize(pair.corrected))
-        examples.append(Example(tokens, (tuple(edits),), pair.text))
+        references = tuple(
+            tuple(annotator.reference_edits(tokens, annotator.tokenize(corrected)))
+            for corrected in (pair.corrected, *pair.alternatives)
+        )
+        examples.append(Example(tokens, references, pair.text))
     return examples
 
 

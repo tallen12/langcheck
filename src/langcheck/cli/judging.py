@@ -7,6 +7,7 @@ only judges edits the store lacks.
 
 import asyncio
 import dataclasses
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Annotated
@@ -18,6 +19,14 @@ from langcheck.cli.environment import CliEnvironment
 from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.examples import CorrectedPair, Example, load_examples
 from langcheck.evaluation.protocols import EditAnnotator
+from langcheck.judging.clean import (
+    CleanSentence,
+    LeftOut,
+    LeftOutReason,
+    Scope,
+    clean,
+    clean_line,
+)
 from langcheck.judging.consensus import DEFAULT_QUORUM
 from langcheck.judging.llm_judge import LLMEditJudge, judge_name
 from langcheck.judging.models import Item, Source
@@ -26,6 +35,7 @@ from langcheck.judging.panel import (
     JudgeRun,
     Summary,
     Tally,
+    consensus_by_item,
     pool_item,
     run_panel,
 )
@@ -39,6 +49,7 @@ CLEAN = 0
 FAILED = 2
 DEFAULT_DATA = Path("data") / "eval"
 DEFAULT_STORE = Path("data") / "judgments"
+CLEAN_FILE = "clean-{}.jsonl"
 
 type SettingsLoader = Callable[[Path | None, Mapping[str, object]], ClientSettings]
 type Guard = Callable[[Callable[[], int]], int]
@@ -181,7 +192,79 @@ def judge_app(env: CliEnvironment, *, settings: SettingsLoader, guarded: Guard) 
 
         return guarded(run)
 
+    @app.command(name="clean")
+    def clean_command(
+        dataset: Dataset,
+        /,
+        *,
+        scope: Annotated[
+            Scope,
+            Parameter(help="local leaves out sentences needing linked edits; all marks them."),
+        ] = Scope.LOCAL,
+        output: Annotated[
+            Path | None, Parameter(help="Default clean-<scope>.jsonl beside the judgments.")
+        ] = None,
+        models: ModelsOption = None,
+        corrector: CorrectorOption = None,
+        standby: StandbyOption = DEFAULT_STANDBY,
+        quorum: QuorumOption = DEFAULT_QUORUM,
+        limit: LimitOption = None,
+        think: ThinkOption = False,
+        store: StoreOption = None,
+        data: DataOption = None,
+    ) -> int:
+        """Write DATASET's gold edits the panel agrees are valid as a corrections file, for
+        ``langcheck suggest measure-file``; never commit it, it derives from the set.
+        """
+
+        def run() -> int:
+            panel = choose_panel(models or DEFAULT_PANEL, corrector=corrector, standby=standby)
+            if not 1 <= quorum <= len(panel):
+                env.err(f"langcheck: --quorum takes 1 to {len(panel)}")
+                return FAILED
+            items = items_for(dataset, (), limit, data)
+            if items is None:
+                return FAILED
+            names = [judge_name(model, think=think) for model in panel]
+            judgments = store_for(dataset, store)
+            decided = consensus_by_item(items, judgments.load(), names, quorum=quorum)
+            kept: list[CleanSentence] = []
+            left: Counter[LeftOutReason] = Counter()
+            for sentence in decided:
+                match clean(sentence, scope=scope):
+                    case CleanSentence() as found:
+                        kept.append(found)
+                    case LeftOut(reason=reason):
+                        left[reason] += 1
+            root = store if store is not None else env.cwd / DEFAULT_STORE
+            folder = store_path(root, dataset.value).parent
+            target = output or folder / CLEAN_FILE.format(scope.value)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                "".join(clean_line(found).model_dump_json() + "\n" for found in kept),
+                encoding="utf-8",
+            )
+            env.out(render_cleaned(kept, left, total=len(decided)))
+            env.out(f"clean set: {target}")
+            return CLEAN
+
+        return guarded(run)
+
     return app
+
+
+def render_cleaned(
+    kept: Sequence[CleanSentence], left: Counter[LeftOutReason], *, total: int
+) -> str:
+    """How many sentences a clean set kept, with edits or without, and why others are out."""
+    edited = sum(found.references[0] != found.text for found in kept)
+    lines = [
+        f"kept {len(kept)} of {total} sentences "
+        f"({edited} with valid edits, {len(kept) - edited} with none, "
+        f"{sum(found.linked for found in kept)} linked)"
+    ]
+    lines += [f"  left out, {reason}: {left[reason]}" for reason in LeftOutReason if left[reason]]
+    return "\n".join(lines)
 
 
 async def _judge(

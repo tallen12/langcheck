@@ -292,18 +292,31 @@ class Summary:
     agreement: dict[tuple[str, str], float]
 
 
-def summarize(
-    items: Sequence[Item],
-    stored: Sequence[Judgment],
-    judges: Sequence[str],
-    *,
-    quorum: int,
-) -> Summary:
-    """The consensus of ``judges`` (only these vote) on every item's edits and sentence."""
-    verdicts: dict[EditId, dict[str, Verdict]] = {}
-    links: dict[EditId, dict[str, bool]] = {}
-    remaining: dict[SentenceKey, dict[str, bool]] = {}
-    preferred: dict[SentenceKey, dict[str, str]] = {}
+@dataclass(frozen=True, slots=True)
+class ItemConsensus:
+    """The panel's consensus on one sentence: each pooled edit's verdict, the edits that
+    only work together with another (by the panel or by their shape), whether an error is
+    left, and the best correction when there are several (a version's label, ``tie`` or
+    ``none``).
+    """
+
+    item: Item
+    edits: dict[EditKey, Consensus[Verdict]]
+    linked: frozenset[EditKey]
+    remaining: Consensus[bool]
+    preference: Consensus[str] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _Votes:
+    verdicts: dict[EditId, dict[str, Verdict]] = field(default_factory=dict)
+    links: dict[EditId, dict[str, bool]] = field(default_factory=dict)
+    remaining: dict[SentenceKey, dict[str, bool]] = field(default_factory=dict)
+    preferred: dict[SentenceKey, dict[str, str]] = field(default_factory=dict)
+
+
+def _collect(stored: Sequence[Judgment], judges: Sequence[str]) -> _Votes:
+    votes = _Votes()
     panel = set(judges)
     for record in stored:
         if record.judge not in panel:
@@ -312,49 +325,87 @@ def summarize(
         match record:
             case EditJudgment():
                 edit = (record.sentence, *record.edit)
-                verdicts.setdefault(edit, {})[record.judge] = record.verdict
-                links.setdefault(edit, {})[record.judge] = bool(record.linked)
+                votes.verdicts.setdefault(edit, {})[record.judge] = record.verdict
+                votes.links.setdefault(edit, {})[record.judge] = bool(record.linked)
             case SentenceJudgment():
-                remaining.setdefault(record.sentence, {})[record.judge] = record.remaining_error
+                votes.remaining.setdefault(record.sentence, {})[record.judge] = (
+                    record.remaining_error
+                )
             case PreferenceJudgment():
                 choice = record.preferred if record.choice is Choice.VERSION else record.choice
-                preferred.setdefault(record.sentence, {})[record.judge] = str(choice)
+                votes.preferred.setdefault(record.sentence, {})[record.judge] = str(choice)
             case unreachable:
                 assert_never(unreachable)
+    return votes
+
+
+def _decide(item: Item, votes: _Votes, judges: int, quorum: int) -> ItemConsensus:
+    def vote[T: Hashable](given: dict[str, T]) -> Consensus[T]:
+        return consensus(list(given.values()), judges=judges, quorum=quorum)
+
+    shaped: set[EditKey] = set()
+    for version in item.versions:
+        shaped |= set(shape_links(item.tokens, version.edits))
+    edits: dict[EditKey, Consensus[Verdict]] = {}
+    linked: set[EditKey] = set()
+    for candidate in item.candidates:
+        edit = (item.key, *candidate.key)
+        edits[candidate.key] = vote(votes.verdicts.get(edit, {}))
+        said = vote(votes.links.get(edit, {}))
+        if candidate.key in shaped or (isinstance(said, Agreed) and said.value):
+            linked.add(candidate.key)
+    preference = vote(votes.preferred.get(item.key, {})) if len(item.versions) > 1 else None
+    return ItemConsensus(
+        item, edits, frozenset(linked), vote(votes.remaining.get(item.key, {})), preference
+    )
+
+
+def consensus_by_item(
+    items: Sequence[Item],
+    stored: Sequence[Judgment],
+    judges: Sequence[str],
+    *,
+    quorum: int,
+) -> list[ItemConsensus]:
+    """The consensus of ``judges`` (only these vote) on each sentence of ``items``, once
+    per sentence in first-seen order.
+    """
+    votes = _collect(stored, judges)
+    return [_decide(item, votes, len(judges), quorum) for item in merged(items)]
+
+
+def summarize(
+    items: Sequence[Item],
+    stored: Sequence[Judgment],
+    judges: Sequence[str],
+    *,
+    quorum: int,
+) -> Summary:
+    """The consensus of ``judges`` (only these vote) on every item's edits and sentence."""
+    votes = _collect(stored, judges)
     edits = {source: _Counting() for source in Source}
     linked = dict.fromkeys(Source, 0)
     sentences = _Counting()
     preferences = _Counting()
     by_judge = {judge: Counter[Verdict]() for judge in judges}
-
-    def vote[T: Hashable](given: dict[str, T]) -> Consensus[T]:
-        return consensus(list(given.values()), judges=len(judges), quorum=quorum)
-
     for item in merged(items):
-        sentences.add(vote(remaining.get(item.key, {})))
-        if len(item.versions) > 1:
-            preferences.add(vote(preferred.get(item.key, {})))
-        shaped: set[EditKey] = set()
-        for version in item.versions:
-            shaped |= set(shape_links(item.tokens, version.edits))
+        decided = _decide(item, votes, len(judges), quorum)
+        sentences.add(decided.remaining)
+        if decided.preference is not None:
+            preferences.add(decided.preference)
         for candidate in item.candidates:
-            edit = (item.key, *candidate.key)
-            given = verdicts.get(edit, {})
-            for judge, verdict in given.items():
+            for judge, verdict in votes.verdicts.get((item.key, *candidate.key), {}).items():
                 by_judge[judge][verdict] += 1
-            outcome = vote(given)
-            said = vote(links.get(edit, {}))
-            is_linked = candidate.key in shaped or (isinstance(said, Agreed) and said.value)
             for source in candidate.sources:
-                edits[source].add(outcome)
-                linked[source] += is_linked
+                edits[source].add(decided.edits[candidate.key])
+                linked[source] += candidate.key in decided.linked
     return Summary(
         {source: counting.tally() for source, counting in edits.items()},
         linked,
         preferences.tally(),
         sentences.tally(),
         by_judge,
-        _agreement(verdicts, judges),
+        _agreement(votes.verdicts, judges),
     )
 
 

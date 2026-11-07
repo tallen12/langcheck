@@ -3,6 +3,7 @@ from collections import Counter
 from collections.abc import Sequence
 
 from langcheck.evaluation.models import ScoredEdit
+from langcheck.judging.consensus import Agreed
 from langcheck.judging.models import (
     Choice,
     EditJudgment,
@@ -21,7 +22,14 @@ from langcheck.judging.models import (
     Verdict,
     Version,
 )
-from langcheck.judging.panel import merged, pool_item, run_panel, summarize, unjudged
+from langcheck.judging.panel import (
+    consensus_by_item,
+    merged,
+    pool_item,
+    run_panel,
+    summarize,
+    unjudged,
+)
 
 GO = ScoredEdit(1, 2, ("went",), None)
 THE = ScoredEdit(3, 3, ("the",), None)
@@ -233,3 +241,23 @@ def test_unjudged_edits_are_pending_and_split_votes_disputed() -> None:
     assert disputed.edits[Source.GOLD].disputed == 1
     assert disputed.edits[Source.RUN].total == 0
     assert disputed.preferences.total == 0
+
+
+def test_consensus_by_item_settles_each_sentence_once() -> None:
+    item = pool_item(TOKENS, gold=[(GO, THE), (GO,)])
+    store = ListStore()
+    judges = [
+        FixedJudge(name, Verdict.VALID, link_all=True, preference=Preferred(1, "")) for name in "ab"
+    ]
+    asyncio.run(run_panel([item], judges, store))
+
+    [decided] = consensus_by_item([item, item], store.judgments, ["a", "b", "c"], quorum=2)
+
+    assert decided.item.key == item.key
+    assert decided.edits == {
+        GO.key: Agreed(Verdict.VALID, 2),
+        THE.key: Agreed(Verdict.VALID, 2),
+    }
+    assert decided.linked == {GO.key, THE.key}
+    assert decided.remaining == Agreed(value=False, votes=2)
+    assert decided.preference == Agreed("annotator 2", 2)

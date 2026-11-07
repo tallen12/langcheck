@@ -154,6 +154,21 @@ def test_corrected_pairs_become_one_reference_each(tmp_path: Path) -> None:
     assert second.annotators == ((),)
 
 
+def test_alternatives_are_further_references(tmp_path: Path) -> None:
+    path = tmp_path / "pairs.jsonl"
+    path.write_text(
+        '{"text": "He go home", "corrected": "He goes home", "alternatives": ["He went home"]}\n',
+        encoding="utf-8",
+    )
+
+    [example] = load_corrected_pairs(path, TokenDiffAnnotator())
+
+    assert [[edit.correction for edit in edits] for edits in example.annotators] == [
+        [("goes",)],
+        [("went",)],
+    ]
+
+
 def test_a_line_without_a_correction_is_refused(tmp_path: Path) -> None:
     path = tmp_path / "pairs.jsonl"
     path.write_text('{"text": "He go home"}\n', encoding="utf-8")

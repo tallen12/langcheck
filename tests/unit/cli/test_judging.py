@@ -144,6 +144,40 @@ def test_judges_that_reason_are_stored_and_shown_apart(tmp_path: Path) -> None:
     assert "gold edits: 1 (valid 0, neutral 0, wrong 0, disputed 0, pending 1)" in plain.output
 
 
+def test_clean_writes_the_valid_gold_as_a_corrections_file(tmp_path: Path) -> None:
+    fetched(tmp_path)
+    models = ("--models", *PANEL)
+    run(tmp_path, JudgeServer(), "judge", "run", "cweb-g-dev", *models, *URL)
+
+    code, cli = run(tmp_path, JudgeServer(), "judge", "clean", "cweb-g-dev", *models)
+
+    assert code == 0, cli.err
+    folder = store_path(tmp_path / "data" / "judgments", "cweb-g-dev").parent
+    lines = [
+        json.loads(line)
+        for line in (folder / "clean-local.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [(line["text"], line["corrected"]) for line in lines] == [
+        ("He go to school.", "He went to school."),
+        ("It is fine.", "It is fine."),
+    ]
+    assert "kept 2 of 2 sentences (1 with valid edits, 1 with none, 0 linked)" in cli.output
+
+
+def test_clean_leaves_out_sentences_the_panel_has_not_judged(tmp_path: Path) -> None:
+    fetched(tmp_path)
+    output = tmp_path / "out" / "clean.jsonl"
+
+    code, cli = run(
+        tmp_path, JudgeServer(), "judge", "clean", "cweb-g-dev", "--output", str(output)
+    )
+
+    assert code == 0, cli.err
+    assert output.read_text(encoding="utf-8") == ""
+    assert "kept 0 of 2 sentences" in cli.output
+    assert "left out, pending: 2" in cli.output
+
+
 def test_unusable_replies_fail_the_run_and_store_nothing(tmp_path: Path) -> None:
     fetched(tmp_path)
 

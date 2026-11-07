@@ -761,6 +761,17 @@ in this order: steps 2 to 6 depend on each other, 7 and 8 stand alone, 9 needs 1
    made from an evaluation set is marked as evaluation data (see
    `langcheck synth`) and is only evaluated on; one made from a corpus whose licence
    allows it, such as the OmniGEC training side, may also be trained on.
+
+   *As built:* `langcheck judge clean SET` writes the gold side (run edits are not added
+   yet) to `clean-<scope>.jsonl` beside the set's judgments: `text` as published,
+   `corrected` (the main reference), `alternatives` (the other valid corrections) and
+   `linked`. Without an agreed preference, the correction with most valid edits leads. A
+   correction whose edits were all rejected is dropped as a reference when another one
+   fixes something, or a checker that changes nothing would match it. `--scope local`
+   (the default) leaves out sentences that need a linked edit; `--scope all` keeps them
+   with `linked` set. Pending and disputed sentences are left out too, each reason
+   counted. `langcheck suggest measure-file` reads the file directly and scores each
+   alternative as another annotator.
 5. **Judged scores.** Reports keep raw ERRANT F0.5 and add scores against the clean set:
    precision is gold matches plus edits judged valid, over all edits except neutral ones;
    recall is over gold edits judged valid. Reports show how many edits have a consensus
