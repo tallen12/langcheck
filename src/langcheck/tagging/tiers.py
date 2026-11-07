@@ -4,11 +4,17 @@ A hand review of false alarms found most low scores wrong and most high scores r
 errors, and one error often lighting up several neighbouring slots. So scores become two
 confidence tiers, neighbouring slots one flag, and a likely missing comma a kind of its
 own, since annotators are inconsistent about those and many are a matter of style.
+
+Lowering the threshold to catch weaker errors also joins weak neighbours into long flags,
+and long flags are harder to rewrite. ``Falloff`` keeps the threshold for starting a flag
+and lets a flag take in weaker neighbours only while they stay likely for their distance.
 """
 
+import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import assert_never
 
 from langcheck.tagging.alignment import CharSpan
 from langcheck.tagging.models import SlotScores
@@ -32,12 +38,46 @@ class FlagKind(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class Adjacent:
+    """Only slots at the suggestion threshold are flagged; neighbours among them join."""
+
+
+@dataclass(frozen=True, slots=True)
+class Falloff:
+    """Slots at the suggestion threshold start flags, which then take in neighbouring slots
+    clearing a bar that rises with distance: ``join`` one word away, ``rate`` times more for
+    each word further. A word below its bar ends the flag on that side; a gap below its bar
+    does not, as two flagged words either side of a gap are one flag anyway.
+    """
+
+    join: float
+    rate: float = 2.0
+
+    def __post_init__(self) -> None:
+        if self.join <= 0.0 or self.rate < 1.0:
+            msg = f"need join > 0 and rate >= 1, got {self.join}, {self.rate}"
+            raise ValueError(msg)
+
+    def bar(self, distance: int) -> float:
+        """The score a slot ``distance`` words from where its flag started needs."""
+        return self.join * math.pow(self.rate, distance - 1)
+
+
+Growth = Adjacent | Falloff
+
+
+@dataclass(frozen=True, slots=True)
 class TierPolicy:
-    """The score where each tier begins, and where a gap counts as a missing comma."""
+    """The score where each tier begins, where a gap counts as a missing comma, and how
+    flags grow past their slots at the threshold.
+    """
 
     error: float = 0.7
-    suggestion: float = 0.3
+    suggestion: float = 0.1
+    """Low on purpose: the proposer and its gate drop flags no correction improves, and
+    from 0.3 the tagger missed about 30% of real errors in edited prose."""
     comma: float = 0.5
+    growth: Growth = field(default_factory=Adjacent)
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.suggestion <= self.error <= 1.0:
@@ -79,19 +119,50 @@ def _joins(previous: int, slot: int) -> bool:
     return slot - previous == BRIDGE and slot % 2 == 1
 
 
+def _grown(
+    slots: Sequence[float], starts: Sequence[int], blocked: set[int], growth: Growth
+) -> set[int]:
+    """The slots ``growth`` adds around ``starts``, never crossing a ``blocked`` slot."""
+    match growth:
+        case Adjacent():
+            return set()
+        case Falloff():
+            pass
+        case _:
+            assert_never(growth)
+    found: set[int] = set()
+    for start in starts:
+        for step in (-1, 1):
+            slot = start + step
+            while 0 <= slot < len(slots) and slot not in blocked:
+                if slots[slot] >= growth.bar((abs(slot - start) + 1) // 2):
+                    found.add(slot)
+                elif slot % 2 == 1:
+                    break
+                slot += step
+    return found
+
+
 def slot_flags(
     scores: SlotScores, commas: Sequence[float] | None, policy: TierPolicy
 ) -> list[SlotFlag]:
     """Every flag of a sentence, in reading order. ``commas`` is each gap's probability
     that what is missing there is a comma; without it no flag is an optional comma.
     """
-    flagged: list[tuple[int, float, bool]] = []
-    for index, gap in enumerate(scores.gaps):
-        if gap >= policy.suggestion:
-            comma = commas is not None and commas[index] >= policy.comma
-            flagged.append((2 * index, gap, comma))
-        if index < len(scores.words) and scores.words[index] >= policy.suggestion:
-            flagged.append((2 * index + 1, scores.words[index], False))
+    slots = [
+        score
+        for index, gap in enumerate(scores.gaps)
+        for score in (gap, *scores.words[index : index + 1])
+    ]
+    starts = [slot for slot, score in enumerate(slots) if score >= policy.suggestion]
+    optional = {
+        slot
+        for slot in starts
+        if slot % 2 == 0 and commas is not None and commas[slot // 2] >= policy.comma
+    }
+    general = [slot for slot in starts if slot not in optional]
+    included = sorted({*starts, *_grown(slots, general, optional, policy.growth)})
+    flagged = [(slot, slots[slot], slot in optional) for slot in included]
     flags: list[SlotFlag] = []
     run: list[tuple[int, float]] = []
 

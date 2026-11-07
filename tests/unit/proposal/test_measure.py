@@ -9,6 +9,7 @@ from langcheck.proposal.measure import (
     gold_spans,
     normal,
     ranked,
+    raw_cases,
     recall_row,
     tune,
 )
@@ -82,6 +83,18 @@ def test_cases_read_each_proposal_and_leave_out_the_keep() -> None:
     assert [p.removed for p in found.proposals] == [0, 1, 0]
 
 
+def test_raw_cases_keep_the_beam_order_without_reading() -> None:
+    [found] = raw_cases(
+        [SENTENCE], gold_spans([SENTENCE]), [reading(SENTENCE.tokens)], [""], Source()
+    )
+
+    assert found.keep_first
+    assert [p.text for p in found.proposals] == ["go", "", "goes"]
+    assert [p.drop for p in found.proposals] == [0.0, 0.0, 0.0]
+    assert [p.removed for p in found.proposals] == [0, 1, 0]
+    assert recall_row("raw", [found]).mrr == 1 / 3
+
+
 def test_flagged_spans_follow_the_policy() -> None:
     spans = flagged_spans(TierPolicy())
 
@@ -109,6 +122,7 @@ def test_recall_counts_unreachable_spans_and_skips_false_alarms() -> None:
     assert row.cases == 2
     assert row.recall[1] == 0.0
     assert row.recall[2] == 0.5
+    assert row.mrr == 0.25
 
 
 def test_tuning_finds_what_lifts_recall_and_prefers_no_change_on_a_tie() -> None:

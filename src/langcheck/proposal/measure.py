@@ -45,13 +45,16 @@ class Case:
 
 
 class RecallRow(BaseModel):
-    """Share of spans with a right answer in the top k, under one scoring."""
+    """Share of spans with a right answer in the top k, and the mean reciprocal rank of
+    the first right answer, under one scoring.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     scoring: str
     cases: int
     recall: dict[int, float]
+    mrr: float
     deletions_first: float
 
 
@@ -70,17 +73,7 @@ def build_cases(
     log: Callable[[str], None],
 ) -> list[Case]:
     """A case for every span, with every distinct proposal read by the tagger."""
-    pending: list[tuple[int, WordSpan, tuple[Proposal, ...]]] = []
-    wanted = [(index, tuple(spans_of(index, readings[index]))) for index in range(len(sentences))]
-    wanted = [item for item in wanted if item[1]]
-    for begin in range(0, len(wanted), LOG_EVERY):
-        part = wanted[begin : begin + LOG_EVERY]
-        written = source.propose(
-            [ProposalRequest(sentences[i].tokens, contexts[i], spans) for i, spans in part]
-        )
-        for (index, spans), per_span in zip(part, written, strict=True):
-            pending += [(index, s, p) for s, p in zip(spans, per_span, strict=True)]
-        log(f"proposed for {begin + len(part)}/{len(wanted)} sentences")
+    pending = _proposed(sentences, spans_of, readings, contexts, source, log=log)
     keys: dict[tuple[str, ...], int] = {}
     owners: list[int] = []
     rows: list[list[tuple[str, float, int, int]]] = []
@@ -121,6 +114,66 @@ def build_cases(
     return cases
 
 
+def raw_cases(
+    sentences: Sequence[AnnotatedSentence],
+    spans_of: Callable[[int, SentenceReading], Sequence[WordSpan]],
+    readings: Sequence[SentenceReading],
+    contexts: Sequence[str],
+    source: ProposalSource,
+) -> list[Case]:
+    """A case for every span with the beam's proposals as written: nothing is read by the
+    tagger, so every drop is 0 and only the proposer's own order can be scored.
+    """
+    cases: list[Case] = []
+    for index, span, proposals in _proposed(
+        sentences, spans_of, readings, contexts, source, log=lambda _line: None
+    ):
+        sentence = sentences[index]
+        cases.append(
+            Case(
+                sentence=index,
+                answers=frozenset(normal("".join(words)) for words in references(sentence, span)),
+                false_alarm=is_false_alarm(sentence, span),
+                keep_first=bool(proposals) and proposals[0].keep,
+                proposals=tuple(
+                    Scored(
+                        proposal.text,
+                        proposal.log_probability,
+                        0.0,
+                        max(0, span.end - span.start - len(split_words(proposal.text))),
+                    )
+                    for proposal in proposals
+                    if not proposal.keep
+                ),
+            )
+        )
+    return cases
+
+
+def _proposed(
+    sentences: Sequence[AnnotatedSentence],
+    spans_of: Callable[[int, SentenceReading], Sequence[WordSpan]],
+    readings: Sequence[SentenceReading],
+    contexts: Sequence[str],
+    source: ProposalSource,
+    *,
+    log: Callable[[str], None],
+) -> list[tuple[int, WordSpan, tuple[Proposal, ...]]]:
+    """Each wanted span of each sentence with the proposals written for it."""
+    pending: list[tuple[int, WordSpan, tuple[Proposal, ...]]] = []
+    wanted = [(index, tuple(spans_of(index, readings[index]))) for index in range(len(sentences))]
+    wanted = [item for item in wanted if item[1]]
+    for begin in range(0, len(wanted), LOG_EVERY):
+        part = wanted[begin : begin + LOG_EVERY]
+        written = source.propose(
+            [ProposalRequest(sentences[i].tokens, contexts[i], spans) for i, spans in part]
+        )
+        for (index, spans), per_span in zip(part, written, strict=True):
+            pending += [(index, s, p) for s, p in zip(spans, per_span, strict=True)]
+        log(f"proposed for {begin + len(part)}/{len(wanted)} sentences")
+    return pending
+
+
 def flagged_spans(policy: TierPolicy) -> Callable[[int, SentenceReading], list[WordSpan]]:
     """The spans of a sentence's flags under ``policy``, as users would see them."""
 
@@ -155,11 +208,12 @@ def ranked(case: Case, weight: float, penalty: float) -> list[Scored]:
 def recall_row(
     scoring: str, cases: Iterable[Case], *, weight: float = 0.0, penalty: float = 0.0
 ) -> RecallRow:
-    """Recall at each cutoff over ``cases``; unreachable spans count as misses, and false
-    alarms are left out.
+    """Recall at each cutoff and MRR over ``cases``; unreachable spans count as misses, and
+    false alarms are left out.
     """
     wanted = [case for case in cases if not case.false_alarm]
     hits = dict.fromkeys(CUTOFFS, 0)
+    reciprocal = 0.0
     deletions = 0
     for case in wanted:
         order = ranked(case, weight, penalty)
@@ -167,6 +221,7 @@ def recall_row(
         where = next(
             (at for at, s in enumerate(order, start=1) if normal(s.text) in case.answers), None
         )
+        reciprocal += 1 / where if where is not None else 0.0
         for cutoff in CUTOFFS:
             hits[cutoff] += where is not None and where <= cutoff
     size = max(1, len(wanted))
@@ -174,6 +229,7 @@ def recall_row(
         scoring=scoring,
         cases=len(wanted),
         recall={cutoff: hits[cutoff] / size for cutoff in CUTOFFS},
+        mrr=reciprocal / size,
         deletions_first=deletions / size,
     )
 

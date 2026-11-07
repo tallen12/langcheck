@@ -1,6 +1,7 @@
 """``langcheck suggest``: flag a text with the tagger and have the LLM correct the flags."""
 
 import asyncio
+import random
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -24,6 +25,14 @@ from langcheck.correction.models import (
 )
 from langcheck.correction.pipeline import CorrectionPipeline
 from langcheck.correction.protocols import Corrector
+from langcheck.correction.records import (
+    FATES,
+    Direction,
+    read_report,
+    render_record,
+    sample,
+    select,
+)
 from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.examples import Example, load_corrected_pairs, load_examples
 from langcheck.evaluation.protocols import EditAnnotator
@@ -147,11 +156,12 @@ def suggest_app(
         annotator: EditAnnotator,
         trained: Trained | Proposing,
         loaded: ClientSettings,
+        tiers: TierPolicy,
         policy: CorrectionPolicy,
         output: Path | None,
     ) -> None:
         texts = [example.text for example in examples]
-        found = asyncio.run(outcomes_of_all(texts, trained, loaded, DEFAULT_POLICY, policy))
+        found = asyncio.run(outcomes_of_all(texts, trained, loaded, tiers, policy))
         report = measure(examples, found, annotator, dataset=name)
         if output is not None:
             output.parent.mkdir(parents=True, exist_ok=True)
@@ -234,6 +244,9 @@ def suggest_app(
         proposer: Annotated[
             Path | None, Parameter(help="A trained proposer to use instead of the LLM.")
         ] = None,
+        suggestion: Annotated[float, Parameter(help="Lowest score flagged at all.")] = (
+            DEFAULT_POLICY.suggestion
+        ),
         device: Annotated[str, Parameter(help="PyTorch device, such as cpu or cuda.")] = "cuda",
         data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
         config: Annotated[Path | None, Parameter(help="YAML settings file.")] = None,
@@ -254,7 +267,42 @@ def suggest_app(
             annotator = env.edit_annotators()
             examples = load_examples(dataset, files, annotator, limit=limit)
             policy = CorrectionPolicy(count=count, min_reduction=min_reduction)
-            report_on(dataset.value, examples, annotator, trained, loaded, policy, output)
+            tiers = TierPolicy(error=max(DEFAULT_POLICY.error, suggestion), suggestion=suggestion)
+            report_on(dataset.value, examples, annotator, trained, loaded, tiers, policy, output)
+            return CLEAN
+
+        return guarded(run)
+
+    @app.command(name="records")
+    def records_command(
+        report: Path,
+        /,
+        *,
+        fate: Annotated[
+            str | None,
+            Parameter(help="Only this fate: offered, or a reason such as still_flagged."),
+        ] = None,
+        moved: Annotated[
+            Direction | None,
+            Parameter(help="Only corrections that help, hurt or leave the sentence as far."),
+        ] = None,
+        sample_size: Annotated[
+            int, Parameter(name="--sample", help="How many to show, drawn at random.")
+        ] = 20,
+        seed: int = 0,
+        window: Annotated[int, Parameter(help="Characters of text either side of the flag.")] = 50,
+    ) -> int:
+        """Show a sample of the corrections a report saved with ``measure --output``."""
+
+        def run() -> int:
+            if fate is not None and fate not in FATES:
+                env.err(f"langcheck: --fate takes one of {', '.join(sorted(FATES))}")
+                return FAILED
+            records = read_report(report).records
+            found = select(records, fate=fate, moved=moved)
+            env.out(f"{len(found)} of {len(records)} corrections match")
+            for record in sample(found, count=sample_size, rng=random.Random(seed)):
+                env.out(render_record(record, window=window))
             return CLEAN
 
         return guarded(run)
@@ -276,6 +324,9 @@ def suggest_app(
         proposer: Annotated[
             Path | None, Parameter(help="A trained proposer to use instead of the LLM.")
         ] = None,
+        suggestion: Annotated[float, Parameter(help="Lowest score flagged at all.")] = (
+            DEFAULT_POLICY.suggestion
+        ),
         device: Annotated[str, Parameter(help="PyTorch device, such as cpu or cuda.")] = "cuda",
         config: Annotated[Path | None, Parameter(help="YAML settings file.")] = None,
         llm_url: Annotated[
@@ -291,7 +342,8 @@ def suggest_app(
             annotator = env.edit_annotators()
             examples = load_corrected_pairs(file, annotator, limit=limit)
             policy = CorrectionPolicy(count=count, min_reduction=min_reduction)
-            report_on(file.stem, examples, annotator, trained, loaded, policy, output)
+            tiers = TierPolicy(error=max(DEFAULT_POLICY.error, suggestion), suggestion=suggestion)
+            report_on(file.stem, examples, annotator, trained, loaded, tiers, policy, output)
             return CLEAN
 
         return guarded(run)

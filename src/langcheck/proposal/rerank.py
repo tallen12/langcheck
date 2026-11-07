@@ -19,12 +19,14 @@ class Scored:
 @dataclass(frozen=True, slots=True)
 class RerankPolicy:
     """Orders by ``log probability + weight * drop - penalty * removed``. The penalty is
-    there because deleting words always lowers the tagger's score. Tuned on half of
-    ``bea19-dev`` for recall at 2.
+    there because deleting words always lowers the tagger's score, but only the tagger's
+    checks see a deletion now: tuned on half of the OmniGEC holdout and 500 ``bea19-dev``
+    sentences, at flags from 0.1, for the first proposal that passes and helps, the best
+    penalty was none.
     """
 
     weight: float = 4.0
-    penalty: float = 2.0
+    penalty: float = 0.0
 
 
 def reranked(proposals: Iterable[Scored], policy: RerankPolicy) -> list[Scored]:

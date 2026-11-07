@@ -1,9 +1,10 @@
-"""Training the proposer on the frozen tagger, keeping the epoch with the lowest loss."""
+"""Training the proposer on the frozen tagger, keeping its best epoch."""
 
 import copy
 import random
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import assert_never
 
 import torch
 from transformers import PreTrainedTokenizerBase
@@ -17,11 +18,15 @@ from langcheck.proposal.model import (
     word_embeddings,
 )
 from langcheck.proposal.search import Vocabulary, target_ids, vocabulary
+from langcheck.proposal.storage import StateStore
 from langcheck.proposal.targets import Keep, Rewrite, Target
 from langcheck.tagging.encoding import Encoded, collate, encode, to_device
 from langcheck.tagging.model import SlotTagger
 
 LOG_EVERY = 200
+ENCODE_BATCH = 64
+CACHED = torch.float16
+"""Half precision halves the space a training set's encoder states take."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,11 +61,36 @@ class _Prepared:
 
 
 @dataclass(frozen=True, slots=True)
+class _Cached:
+    prepared: _Prepared
+    states: torch.Tensor
+    """The frozen encoder's states for each subword, held by a ``StateStore``."""
+
+
+@dataclass(frozen=True, slots=True)
+class LowestLoss:
+    """Keep the epoch with the lowest validation loss."""
+
+
+@dataclass(frozen=True, slots=True)
+class HighestScore:
+    """Keep the epoch ``score`` rates highest, ties going to the earlier one. ``score``
+    gets each epoch's number once its loss is logged, with the proposer in evaluation mode.
+    """
+
+    score: Callable[[int], float]
+
+
+EpochChoice = LowestLoss | HighestScore
+
+
+@dataclass(frozen=True, slots=True)
 class ProposerResult:
-    """The best epoch and its validation loss."""
+    """The kept epoch, its validation loss and, when kept by score, its score."""
 
     epoch: int
     loss: float
+    score: float | None = None
 
 
 def _prepare(
@@ -83,10 +113,48 @@ def _prepare(
     return _Prepared(encoded, tuple(cases))
 
 
+def encode_once(
+    tagger: SlotTagger,
+    prepared: Sequence[_Prepared],
+    *,
+    pad: int,
+    device: torch.device,
+    store: StateStore,
+) -> list[_Cached]:
+    """Each sentence with its encoder states, computed once because the tagger is frozen
+    and kept in one tensor from ``store``. Sentences are encoded in length order so batches
+    carry little padding.
+    """
+    lengths = [len(item.encoded.input_ids) for item in prepared]
+    starts = [0]
+    for length in lengths:
+        starts.append(starts[-1] + length)
+    order = sorted(range(len(prepared)), key=lambda i: lengths[i])
+    states: dict[int, torch.Tensor] = {}
+    flat: torch.Tensor | None = None
+    with torch.no_grad():
+        for begin in range(0, len(order), ENCODE_BATCH):
+            rows = order[begin : begin + ENCODE_BATCH]
+            batch = to_device(
+                collate([prepared[i].encoded for i in rows], pad_token_id=pad), device
+            )
+            hidden = tagger.encoder(
+                input_ids=batch.input_ids, attention_mask=batch.attention_mask
+            ).last_hidden_state
+            width = hidden.size(-1)
+            if flat is None:
+                flat = store.allocate(starts[-1] * width, CACHED)
+            for at, i in enumerate(rows):
+                place = flat[starts[i] * width : starts[i + 1] * width].view(lengths[i], width)
+                place.copy_(hidden[at, : lengths[i]])
+                states[i] = place
+    return [_Cached(item, states[i]) for i, item in enumerate(prepared)]
+
+
 def batch_loss(
     tagger: SlotTagger,
     proposer: TokenProposer,
-    prepared: Sequence[_Prepared],
+    cached: Sequence[_Cached],
     *,
     pad: int,
     device: torch.device,
@@ -94,11 +162,11 @@ def batch_loss(
     shuffler: random.Random,
 ) -> torch.Tensor:
     """Cross-entropy over every written subword of up to ``max_cases`` targets."""
+    prepared = [c.prepared for c in cached]
     batch = to_device(collate([p.encoded for p in prepared], pad_token_id=pad), device)
-    with torch.no_grad():
-        states = tagger.encoder(
-            input_ids=batch.input_ids, attention_mask=batch.attention_mask
-        ).last_hidden_state
+    states = torch.nn.utils.rnn.pad_sequence([c.states for c in cached], batch_first=True).to(
+        device, torch.float32
+    )
     cases = [
         (row, segments, ids) for row, item in enumerate(prepared) for segments, ids in item.cases
     ]
@@ -132,23 +200,31 @@ def train_proposer(
     device: torch.device,
     options: ProposerOptions,
     log: Callable[[str], None],
+    store: StateStore,
+    choice: EpochChoice,
 ) -> ProposerResult:
-    """Fit ``proposer``, which ends with its best epoch's weights; ``tagger`` never changes."""
+    """Fit ``proposer``, which ends with the weights of the epoch ``choice`` keeps;
+    ``tagger`` never changes. Its encoder states are computed once and kept in ``store``
+    for every epoch. Training always minimizes the loss; ``choice`` only picks the epoch.
+    """
     torch.manual_seed(options.seed)
     shuffler = random.Random(options.seed)
     pad = int(tokenizer.pad_token_id or 0)
     tokens = vocabulary(tokenizer)
     length = options.max_length
-    fit = [_prepare(item, tokenizer, tokens, max_length=length) for item in items]
-    fit = [item for item in fit if item.cases]
-    held = [_prepare(item, tokenizer, tokens, max_length=length) for item in validation]
-    held = [item for item in held if item.cases]
-    if not fit or not held:
+    to_fit = [_prepare(item, tokenizer, tokens, max_length=length) for item in items]
+    to_fit = [item for item in to_fit if item.cases]
+    to_hold = [_prepare(item, tokenizer, tokens, max_length=length) for item in validation]
+    to_hold = [item for item in to_hold if item.cases]
+    if not to_fit or not to_hold:
         msg = "no targets to train or validate on"
         raise ValueError(msg)
     tagger.eval()
     for parameter in tagger.parameters():
         parameter.requires_grad_(False)
+    log(f"encoding {len(to_fit) + len(to_hold)} sentences once")
+    fit = encode_once(tagger, to_fit, pad=pad, device=device, store=store)
+    held = encode_once(tagger, to_hold, pad=pad, device=device, store=store)
     optimizer = torch.optim.AdamW(
         proposer.parameters(), lr=options.learning_rate, weight_decay=options.weight_decay
     )
@@ -160,6 +236,7 @@ def train_proposer(
         lambda step: min((step + 1) / warmup, max(0.0, (total - step) / max(1, total - warmup))),
     )
     best: ProposerResult | None = None
+    best_rating = 0.0
     best_state: Mapping[str, object] = {}
     for epoch in range(1, options.epochs + 1):
         proposer.train()
@@ -198,11 +275,21 @@ def train_proposer(
                 )
         mean = sum(losses) / len(losses)
         log(f"epoch {epoch}: validation loss {mean:.4f}")
-        if best is None or mean < best.loss:
-            best = ProposerResult(epoch, mean)
+        match choice:
+            case LowestLoss():
+                found = ProposerResult(epoch, mean)
+                rating = -mean
+            case HighestScore(score=score):
+                rating = score(epoch)
+                found = ProposerResult(epoch, mean, rating)
+            case _:
+                assert_never(choice)
+        if best is None or rating > best_rating:
+            best, best_rating = found, rating
             best_state = copy.deepcopy(proposer.state_dict())
     if best is None:
         msg = f"epochs must be positive, got {options.epochs}"
         raise ValueError(msg)
     proposer.load_state_dict(best_state)
+    log(f"keeping epoch {best.epoch}")
     return best

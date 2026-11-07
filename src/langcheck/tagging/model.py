@@ -67,8 +67,19 @@ def _pick(hidden: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
     return hidden.gather(1, positions.unsqueeze(-1).expand(-1, -1, hidden.size(-1)))
 
 
-def slot_loss(batch: Batch, word_logits: torch.Tensor, gap_logits: torch.Tensor) -> torch.Tensor:
-    """Binary cross-entropy over all real slots, words and gaps alike."""
+def slot_loss(
+    batch: Batch,
+    word_logits: torch.Tensor,
+    gap_logits: torch.Tensor,
+    *,
+    error_weight: float = 1.0,
+) -> torch.Tensor:
+    """Binary cross-entropy over all real slots, words and gaps alike.
+
+    ``error_weight`` scales the loss on slots labelled as errors: they are a few percent of
+    all slots, so raising it trades precision for reach.
+    """
     logits = torch.cat([word_logits[batch.word_mask], gap_logits[batch.gap_mask]])
     labels = torch.cat([batch.word_labels[batch.word_mask], batch.gap_labels[batch.gap_mask]])
-    return torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+    weight = torch.tensor(error_weight, device=logits.device, dtype=logits.dtype)
+    return torch.nn.functional.binary_cross_entropy_with_logits(logits, labels, pos_weight=weight)

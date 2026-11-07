@@ -27,6 +27,7 @@ from langcheck.auth.tokens import add_user
 from langcheck.cli.checking import ContextUnavailableError, open_local, open_remote
 from langcheck.cli.environment import CliEnvironment, process_environment
 from langcheck.cli.evaluating import evaluate_app
+from langcheck.cli.noising import TransformerNoiseRuntime, noise_app
 from langcheck.cli.proposing import TransformerProposerRuntime, proposer_app
 from langcheck.cli.render import render_check, render_context
 from langcheck.cli.suggesting import suggest_app
@@ -130,6 +131,7 @@ def build_app(env: CliEnvironment) -> App:
     app.command(evaluate_app(env, settings=client_settings, guarded=guarded))
     app.command(tagger_app(env, runtime=TransformerRuntime(), guarded=guarded))
     app.command(proposer_app(env, runtime=TransformerProposerRuntime(), guarded=guarded))
+    app.command(noise_app(env, runtime=TransformerNoiseRuntime(), guarded=guarded))
     app.command(
         suggest_app(env, runtime=TransformerRuntime(), settings=client_settings, guarded=guarded)
     )

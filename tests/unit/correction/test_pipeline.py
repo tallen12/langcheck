@@ -123,3 +123,21 @@ def test_placing_and_judging_rejections_both_reach_the_outcome(
         RejectionReason.NOT_AT_FLAG,
         RejectionReason.STILL_FLAGGED,
     ]
+
+
+def test_texts_suggested_together_keep_their_own_outcomes_and_offsets(
+    scripted_llm: Callable[[Script], ScriptedLLM],
+) -> None:
+    llm = scripted_llm([reply(("", "goes")), reply(("", "goes"))])
+    pipeline = CorrectionPipeline(
+        corrector=LlmCorrector(llm, CorrectionPolicy(count=3), ChatOptions()),
+        reader=PairedReader(WordTableTagger({"go": 0.9})),
+        tiers=TierPolicy(),
+        policy=CorrectionPolicy(count=3),
+        context_sentences=1,
+    )
+
+    found = asyncio.run(pipeline.suggest_texts(["Fine here.", "He go home.", "Fine. He go home."]))
+
+    assert [len(outcomes) for outcomes in found] == [0, 1, 1]
+    assert [outcome.flag.span.start for outcome in [*found[1], *found[2]]] == [3, 9]

@@ -36,6 +36,11 @@ class Strategy(StrEnum):
     """The LLM's first correction that passes the filters: filters without reordering."""
     TAGGER_RANKED = "tagger-ranked"
     """The offered correction lowering the score most: what ``langcheck suggest`` shows."""
+    BEST_OF_3 = "best-of-3"
+    """The correction closest to a reference among the first three offered: whether a
+    right answer is near the top, though not first."""
+    BEST_OF_5 = "best-of-5"
+    """The same among the first five offered."""
     BEST_OFFERED = "best-offered"
     """The offered correction closest to a reference: the best any ordering could do."""
 
@@ -109,6 +114,9 @@ class CorrectionReport(BaseModel):
     flags: int
     unavailable: int
     no_corrections: int
+    mrr: float
+    """Mean over flags of one over the rank of the first offered correction that moves the
+    sentence toward a reference, counting 0 when none does (false alarms included)."""
     strategies: list[StrategyRow]
     fates: list[FateRow]
     order: list[OrderRow]
@@ -144,6 +152,23 @@ async def suggest_all(
     return list(await asyncio.gather(*(one(text) for text in texts)))
 
 
+async def suggest_batched(
+    pipeline: CorrectionPipeline,
+    texts: Sequence[str],
+    *,
+    batch: int,
+    log: Callable[[str], None],
+) -> list[list[FlagOutcome]]:
+    """The pipeline's outcomes for each of ``texts``, in order, ``batch`` texts at a time
+    corrected together: for a local corrector, whose models gain from large batches.
+    """
+    found: list[list[FlagOutcome]] = []
+    for begin in range(0, len(texts), batch):
+        found += await pipeline.suggest_texts(texts[begin : begin + batch])
+        log(f"{len(found)}/{len(texts)} sentences")
+    return found
+
+
 def apply_all(text: str, candidates: Iterable[Candidate]) -> str:
     """``text`` with ``candidates`` applied; of overlapping ones, the first in the text."""
     pieces: list[str] = []
@@ -175,8 +200,24 @@ def _choose(
             return min(offered, key=lambda c: c.position) if offered else None
         case Strategy.TAGGER_RANKED:
             return next(iter(offered), None)
+        case Strategy.BEST_OF_3:
+            return _closest(offered[:3], gains)
+        case Strategy.BEST_OF_5:
+            return _closest(offered[:5], gains)
         case Strategy.BEST_OFFERED:
-            return max(offered, key=lambda c: gains[c]) if offered else None
+            return _closest(offered, gains)
+
+
+def _closest(candidates: Sequence[Candidate], gains: dict[Candidate, int]) -> Candidate | None:
+    return max(candidates, key=lambda c: gains[c]) if candidates else None
+
+
+def reciprocal_rank(outcome: Corrected, gains: dict[Candidate, int]) -> float:
+    """One over the rank of the first offered correction with a positive gain, else 0."""
+    for rank, offered in enumerate(outcome.ranked, start=1):
+        if gains[offered.candidate] > 0:
+            return 1 / rank
+    return 0.0
 
 
 def _order_pairs(outcome: Corrected, gains: dict[Candidate, int]) -> Iterable[tuple[bool, bool]]:
@@ -202,6 +243,7 @@ def measure(
     records: list[CorrectionRecord] = []
     order = {True: [0, 0], False: [0, 0]}
     flags = unavailable = no_corrections = 0
+    reciprocal = 0.0
     for index, (example, found) in enumerate(zip(examples, outcomes, strict=True)):
         chosen: dict[Strategy, list[Candidate]] = {strategy: [] for strategy in Strategy}
         for outcome in found:
@@ -214,6 +256,7 @@ def measure(
                         no_corrections += 1
                     gains = {c: _moved([c], example, annotator).gain for c in _applicable(outcome)}
                     records += _records(index, example.text, outcome, gains)
+                    reciprocal += reciprocal_rank(outcome, gains)
                     for strategy in Strategy:
                         choice = _choose(strategy, outcome, gains)
                         if choice is not None:
@@ -233,6 +276,7 @@ def measure(
         flags=flags,
         unavailable=unavailable,
         no_corrections=no_corrections,
+        mrr=reciprocal / flags if flags else 0.0,
         strategies=[_strategy_row(strategy, tally) for strategy, tally in tallies.items()],
         fates=_fate_rows(records),
         order=[
@@ -315,6 +359,7 @@ def render_measurement(report: CorrectionReport) -> str:
     lines = [
         f"{report.dataset}: {report.sentences} sentences, {report.flags} flags, "
         f"{report.unavailable} unavailable, {report.no_corrections} judged correct by the LLM",
+        f"MRR of the first offered correction that helps: {report.mrr:.3f}",
         "",
         "strategy\tP\tR\tF0.5\ttp\tfp\tfn\tgain/needed",
     ]

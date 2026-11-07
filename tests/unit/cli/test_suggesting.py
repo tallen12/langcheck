@@ -1,5 +1,5 @@
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -13,12 +13,13 @@ from langcheck.cli.suggesting import (
     render_rejected,
     suggest_app,
 )
-from langcheck.cli.tagging import Trained
+from langcheck.cli.tagging import Activations, Start, Trained, TrainingMix
 from langcheck.correction.models import Corrected, Rejected, RejectionReason, Unavailable
 from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.m2 import AnnotatedSentence
 from langcheck.settings.loading import ClientSettings, load_settings
 from langcheck.tagging.alignment import CharSpan
+from langcheck.tagging.selection import EpochChoice
 from langcheck.tagging.tiers import FlagKind, TextFlag, Tier
 from tests.conftest import WordTableTagger
 from tests.unit.cli.test_main import Cli
@@ -31,12 +32,18 @@ class WordTableRuntime:
         self,
         sentences: Sequence[AnnotatedSentence],
         *,
-        base_model: str,
+        start: Start,
         output: Path,
         epochs: int,
         batch_size: int,
+        learning_rate: float,
+        error_weight: float,
+        activations: Activations,
         precision: float,
+        choice: EpochChoice,
         context_sentences: int,
+        mix: TrainingMix,
+        validate_on: Mapping[str, Sequence[tuple[AnnotatedSentence, str]]],
         device: str,
         log: Callable[[str], None],
     ) -> None:
@@ -50,6 +57,7 @@ class WordTableRuntime:
         path: Path,
         sentences: Sequence[AnnotatedSentence],
         *,
+        mix: TrainingMix,
         device: str,
         log: Callable[[str], None],
     ) -> None:
@@ -146,6 +154,16 @@ def test_measure_file_scores_text_and_corrected_lines(tmp_path: Path) -> None:
     assert "tagger-ranked\t1.000\t1.000\t1.000" in cli.output
 
 
+def test_measure_flags_only_from_the_suggestion_threshold(tmp_path: Path) -> None:
+    pairs = tmp_path / "pairs.jsonl"
+    pairs.write_text('{"text": "He go home .", "corrected": "He goes home ."}\n', encoding="utf-8")
+    cli = Cli(tmp_path)
+
+    assert run(cli, "measure-file", "tagger", str(pairs), "--suggestion", "0.99") == CLEAN
+
+    assert "pairs: 1 sentences, 0 flags" in cli.output
+
+
 def test_an_unavailable_flag_says_why() -> None:
     lines = render_outcome("He go home.", Unavailable(FLAG, "LLM error: down"), show_rejected=False)
 
@@ -162,3 +180,28 @@ def test_a_rejection_after_judging_shows_its_reduction() -> None:
     line = render_rejected(Rejected("go", "gos", RejectionReason.NO_IMPROVEMENT, 0.05))
 
     assert line == "  x\t-0.050\t'go' -> 'gos'\tno_improvement"
+
+
+def test_records_shows_a_sample_of_a_saved_reports_corrections(tmp_path: Path) -> None:
+    [path] = dataset_files(Dataset.BEA19_DEV, tmp_path / "data" / "eval")
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "S He go home .\nA 1 2|||R:VERB:SVA|||goes|||REQUIRED|||-NONE-|||0\n", encoding="utf-8"
+    )
+    report = str(tmp_path / "report.json")
+    assert run(Cli(tmp_path), "measure", "tagger", "bea19-dev", "--output", report) == CLEAN
+    cli = Cli(tmp_path)
+
+    code = run(cli, "records", report, "--fate", "offered", "--moved", "helps", "--window", "5")
+
+    assert code == CLEAN
+    assert "1 of " in cli.output
+    assert "offered\treduction" in cli.output
+    assert "[go → goes]" in cli.output
+
+
+def test_records_refuses_an_unknown_fate(tmp_path: Path) -> None:
+    cli = Cli(tmp_path)
+
+    assert run(cli, "records", "report.json", "--fate", "lost") == FAILED
+    assert "--fate takes one of" in "\n".join(cli.err)

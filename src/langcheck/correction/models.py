@@ -55,18 +55,19 @@ class CandidateOrder(StrEnum):
 @dataclass(frozen=True, slots=True)
 class AbstainGate:
     """Whether a correction with a known belief is worth showing: a logistic model of "it
-    moves the text toward a reference", fitted on 1,000 ``bea19-dev`` sentences and 1,000
-    WikEd ones weighted equally. Below ``hide`` it is not offered, and below ``confident``
-    it is offered with low confidence.
+    moves the text toward a reference", fitted on the first two passing proposals of each
+    flag from 0.1 in half the OmniGEC holdout and 500 ``bea19-dev`` sentences, the sets
+    weighted equally. Below ``hide`` it is not offered, and below ``confident`` it is
+    offered with low confidence.
 
-    The flag's own score carries most of the weight: a weak flag is usually a false
-    alarm, and a local model always has something to propose there.
+    The proposer trained on false alarms from 0.1, so its own belief now carries the most
+    weight; the flag's score matters less than when weak flags reached it untrained.
     """
 
-    belief: float = 0.441
-    reduction: float = 0.334
-    flag_score: float = 2.418
-    bias: float = -2.128
+    belief: float = 0.387
+    reduction: float = 0.193
+    flag_score: float = 0.401
+    bias: float = -0.323
     hide: float = -0.5
     confident: float = 0.0
 

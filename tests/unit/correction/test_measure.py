@@ -12,6 +12,7 @@ from langcheck.correction.measure import (
     measure,
     render_measurement,
     suggest_all,
+    suggest_batched,
 )
 from langcheck.correction.models import (
     Candidate,
@@ -88,6 +89,7 @@ def test_strategies_choose_differently() -> None:
     assert row(result, Strategy.LLM_FIRST).tp == 0
     assert row(result, Strategy.FILTERED_FIRST).tp == 0
     assert row(result, Strategy.TAGGER_RANKED).tp == 0
+    assert row(result, Strategy.BEST_OF_3).tp == 1
     best = row(result, Strategy.BEST_OFFERED)
     assert (best.tp, best.fp, best.fn) == (1, 0, 0)
     assert best.share == 1.0
@@ -158,3 +160,53 @@ def test_suggest_all_keeps_order_and_logs_progress(
 
     assert [len(found) for found in outcomes[:2]] == [1, 0]
     assert logged == ["25/26 sentences"]
+
+
+def test_best_of_n_only_looks_at_the_first_n_offered() -> None:
+    wrong = [ranked(word, at, 0.1 * at) for at, word in enumerate(("goes", "gone", "going"))]
+    outcome = Corrected(FLAG, (*wrong, ranked("went", 3, 0.4)), ())
+
+    result = report(outcome)
+
+    assert row(result, Strategy.BEST_OF_3).tp == 0
+    assert row(result, Strategy.BEST_OF_5).tp == 1
+    assert result.mrr == 0.25
+
+
+def test_mrr_counts_flags_with_nothing_right_as_zero() -> None:
+    second = Corrected(FLAG, (ranked("goes", 0, 0.0), ranked("went", 1, 0.1)), ())
+    nothing = Corrected(FLAG, (ranked("goes", 0, 0.0),), ())
+
+    assert report(second, nothing, Unavailable(FLAG, "down")).mrr == 0.5 / 3
+    assert report().mrr == 0.0
+
+
+def test_render_shows_the_mrr() -> None:
+    text = render_measurement(report(Corrected(FLAG, (ranked("went", 0, 0.0),), ())))
+
+    assert "MRR of the first offered correction that helps: 1.000" in text
+    assert "best-of-3" in text
+
+
+def test_suggest_batched_keeps_order_and_logs_each_batch(
+    scripted_llm: Callable[[Sequence[str | LLMError | Responder]], ScriptedLLM],
+) -> None:
+    pipeline = CorrectionPipeline(
+        corrector=LlmCorrector(
+            scripted_llm([json.dumps({"flags": []})] * 3), CorrectionPolicy(), ChatOptions()
+        ),
+        reader=PairedReader(WordTableTagger({"go": 0.9})),
+        tiers=TierPolicy(),
+        policy=CorrectionPolicy(),
+        context_sentences=0,
+    )
+    logged: list[str] = []
+
+    outcomes = asyncio.run(
+        suggest_batched(
+            pipeline, ["He go.", "Fine.", "Fine.", "He go.", "He go."], batch=2, log=logged.append
+        )
+    )
+
+    assert [len(found) for found in outcomes] == [1, 0, 0, 1, 1]
+    assert logged == ["2/5 sentences", "4/5 sentences", "5/5 sentences"]

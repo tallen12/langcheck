@@ -89,7 +89,8 @@ def train_comma_head(
         for row, index in enumerate(indices):
             for gap, comma in wanted[index][1].items():
                 if gap < len(encoded[index].gap_left):
-                    states.append(gaps[row, gap])
+                    # A slice is a view that keeps the whole batch's states alive; copy it.
+                    states.append(gaps[row, gap].clone())
                     labels.append(float(comma))
     log(f"{len(labels)} gold insertions, {int(sum(labels))} of them commas")
     inputs = torch.stack(states).to(device)

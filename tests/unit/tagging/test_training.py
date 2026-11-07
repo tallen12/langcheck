@@ -3,13 +3,17 @@ import torch
 from transformers import PreTrainedTokenizerFast
 
 from langcheck.evaluation.m2 import AnnotatedSentence, GoldEdit
+from langcheck.tagging.flag_reach import FlagReach
 from langcheck.tagging.inference import TaggerScorer
 from langcheck.tagging.labels import SlotLabels
+from langcheck.tagging.selection import ByFlags
+from langcheck.tagging.tiers import TierPolicy
 from langcheck.tagging.training import (
     HOLDOUT_BLOCK,
     HOLDOUT_EVERY,
     InContext,
     TrainingOptions,
+    flag_line,
     sentence_labels,
     split_holdout,
     train,
@@ -87,3 +91,63 @@ def test_training_needs_an_epoch(tiny_tokenizer: PreTrainedTokenizerFast) -> Non
             options=TrainingOptions(epochs=0),
             log=lambda _: None,
         )
+
+
+def test_judging_epochs_by_flags_logs_them_and_keeps_the_best(
+    tiny_tokenizer: PreTrainedTokenizerFast,
+) -> None:
+    lines: list[str] = []
+
+    result = train(
+        tiny_tagger(tiny_tokenizer),
+        tiny_tokenizer,
+        [InContext(WRONG), InContext(RIGHT)] * 8,
+        [InContext(WRONG), InContext(RIGHT)],
+        device=CPU,
+        options=TrainingOptions(
+            epochs=6,
+            batch_size=4,
+            learning_rate=3e-3,
+            warmup_share=0.0,
+            choice=ByFlags(TierPolicy()),
+        ),
+        log=lines.append,
+    )
+
+    flagged = [line for line in lines if "edits inside a flag" in line]
+    assert [line.split(":")[0] for line in flagged] == [f"epoch {e}" for e in range(1, 7)]
+    assert result.flags is not None
+    best = max(float(line.rsplit(" ", 1)[1]) for line in flagged)
+    assert result.flags.f05 == pytest.approx(best, abs=1e-4)
+    assert lines[-1] == f"keeping epoch {result.epoch}"
+
+
+def test_a_mix_of_validation_sets_is_also_reported_set_by_set(
+    tiny_tokenizer: PreTrainedTokenizerFast,
+) -> None:
+    lines: list[str] = []
+
+    train(
+        tiny_tagger(tiny_tokenizer),
+        tiny_tokenizer,
+        [InContext(WRONG), InContext(RIGHT)] * 4,
+        [InContext(WRONG, source="learner"), InContext(RIGHT, source="writers")] * 2,
+        device=CPU,
+        options=TrainingOptions(epochs=1, batch_size=4, choice=ByFlags(TierPolicy())),
+        log=lines.append,
+    )
+
+    flagged = [line for line in lines if "edits inside a flag" in line]
+    assert len(flagged) == 3
+    assert flagged[1].endswith(" on learner")
+    assert flagged[2].endswith(" on writers")
+    assert "0/0 edits inside" in flagged[2]
+
+
+def test_flag_line_shows_precision_reach_and_f05() -> None:
+    line = flag_line(2, TierPolicy(), FlagReach(flags=10, right=8, edits=12, reached=9))
+
+    assert line == (
+        "epoch 2: flags from 0.10, 10 flags, precision 0.800, 9/12 edits inside a flag "
+        "(reach 0.750), F0.5 0.7895"
+    )
