@@ -14,10 +14,12 @@ from cyclopts import App, Parameter
 from langcheck.cli.environment import CliEnvironment
 from langcheck.cli.tagging import read_pair_file
 from langcheck.correction.measure import CorrectionReport, Strategy
+from langcheck.correction.models import AbstainGate
 from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.examples import Example, annotated_examples
 from langcheck.evaluation.m2 import AnnotatedSentence, read_m2
 from langcheck.evaluation.protocols import EditAnnotator
+from langcheck.proposal.gate import save_gate
 from langcheck.proposal.measure import (
     RecallRow,
     build_cases,
@@ -192,7 +194,8 @@ def _epoch_scorer(
     from langcheck.proposal.loaded import BEAM_WIDTH
     from langcheck.proposal.search import BeamProposer
 
-    policy = proposer_policy(CorrectionPolicy())
+    # A proposer in training has no gate yet; one is fitted for it afterwards.
+    policy = proposer_policy(CorrectionPolicy(), None)
     source = BeamProposer(
         loaded.tagger,
         proposer,
@@ -578,6 +581,39 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
                 log=env.out,
             )
             env.out(f"saved: {output}")
+            return CLEAN
+
+        return guarded(run)
+
+    @app.command(name="gate")
+    def gate_command(
+        proposer: Path,
+        /,
+        *,
+        belief: Annotated[float, Parameter(help="Weight of the proposer's own belief.")],
+        reduction: Annotated[float, Parameter(help="Weight of the drop in the tagger's score.")],
+        flag_score: Annotated[float, Parameter(help="Weight of the flag's score.")],
+        bias: float,
+        hide: Annotated[float, Parameter(help="Log odds below which nothing is offered.")] = -0.5,
+        confident: Annotated[
+            float, Parameter(help="Log odds from which a correction is offered with confidence.")
+        ] = 0.0,
+    ) -> int:
+        """Save an abstain gate fitted for the proposer at PROPOSER beside it."""
+
+        def run() -> int:
+            if not proposer.is_dir():
+                env.err(f"langcheck: no proposer at {proposer}")
+                return FAILED
+            gate = AbstainGate(
+                belief=belief,
+                reduction=reduction,
+                flag_score=flag_score,
+                bias=bias,
+                hide=hide,
+                confident=confident,
+            )
+            env.out(f"saved: {save_gate(proposer, gate)}")
             return CLEAN
 
         return guarded(run)

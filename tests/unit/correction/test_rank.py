@@ -131,6 +131,11 @@ def test_nothing_to_judge_does_not_call_the_tagger() -> None:
     assert tagger.batches == []
 
 
+GATE = AbstainGate(
+    belief=0.387, reduction=0.193, flag_score=0.401, bias=-0.323, hide=-0.5, confident=0.0
+)
+
+
 def judged_by_gate(belief: float | None) -> Corrected:
     candidate = replace(replace_go("goes"), belief=belief)
     pending = Pending(FlaggedSentence(SENTENCE, (GO,)), GO, (candidate,), ())
@@ -138,7 +143,7 @@ def judged_by_gate(belief: float | None) -> Corrected:
         [pending],
         PairedReader(WordTableTagger({"go": 0.9})),
         tiers=TIERS,
-        policy=CorrectionPolicy(gate=AbstainGate()),
+        policy=CorrectionPolicy(gate=GATE),
     )
     return corrected
 

@@ -16,8 +16,10 @@ from langcheck.cli.proposing import (
     unfiltered_line,
 )
 from langcheck.correction.measure import CorrectionReport, Strategy, StrategyRow
+from langcheck.correction.models import AbstainGate
 from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.m2 import read_m2
+from langcheck.proposal.gate import load_gate
 from langcheck.proposal.protocols import Proposal, ProposalRequest, ProposalSource
 from langcheck.synthesis.training_mix import TrainingMix
 from langcheck.tagging.models import SentenceReading, SlotScores
@@ -346,3 +348,26 @@ def test_training_refuses_a_negative_error_count(tmp_path: Path) -> None:
 
     assert runtime.mixes == []
     assert "--errors" in "".join(cli.err)
+
+
+def test_gate_saves_the_weights_beside_the_proposer(tmp_path: Path) -> None:
+    proposer = tmp_path / "proposer"
+    proposer.mkdir()
+    cli = Cli(tmp_path)
+    weights = ("--belief", "0.4", "--reduction", "0.2", "--flag-score", "0.4", "--bias=-0.3")
+
+    assert run(cli, FakeRuntime(), "gate", str(proposer), *weights) == 0
+
+    assert load_gate(proposer) == AbstainGate(
+        belief=0.4, reduction=0.2, flag_score=0.4, bias=-0.3, hide=-0.5, confident=0.0
+    )
+    assert f"saved: {proposer / 'gate.json'}" in cli.output
+
+
+def test_gate_needs_a_proposer(tmp_path: Path) -> None:
+    cli = Cli(tmp_path)
+    weights = ("--belief", "1", "--reduction", "1", "--flag-score", "1", "--bias", "0")
+
+    assert run(cli, FakeRuntime(), "gate", str(tmp_path / "missing"), *weights) == FAILED
+
+    assert "no proposer" in cli.err[0]

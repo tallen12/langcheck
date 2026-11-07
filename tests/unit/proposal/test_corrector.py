@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import Sequence
 
 from langcheck.correction.models import (
+    AbstainGate,
     CandidateOrder,
     Corrected,
     CorrectionPolicy,
@@ -140,9 +141,15 @@ def test_candidates_carry_the_belief_of_their_proposal() -> None:
     assert pending.candidates[0].belief == -1.5
 
 
-def test_a_proposer_policy_keeps_its_order_and_gates() -> None:
-    policy = proposer_policy(CorrectionPolicy(count=3))
+def test_a_proposer_policy_keeps_its_order_and_takes_the_proposers_gate() -> None:
+    gate = AbstainGate(
+        belief=1.0, reduction=0.0, flag_score=0.0, bias=0.0, hide=-1.0, confident=0.0
+    )
+
+    policy = proposer_policy(CorrectionPolicy(count=3), gate)
+    ungated = proposer_policy(CorrectionPolicy(), None)
 
     assert policy.count == 3
     assert policy.order is CandidateOrder.AS_WRITTEN
-    assert policy.gate is not None
+    assert policy.gate == gate
+    assert ungated.gate is None

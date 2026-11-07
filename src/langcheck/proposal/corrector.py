@@ -27,11 +27,11 @@ JUDGED: Final = 8
 """Proposals per flag that reach the filters, so rejected ones leave others to offer."""
 
 
-def proposer_policy(policy: CorrectionPolicy) -> CorrectionPolicy:
-    """``policy`` as a proposer needs it: its re-ranked order stands, and the gate decides
-    what is shown and how confidently.
+def proposer_policy(policy: CorrectionPolicy, gate: AbstainGate | None) -> CorrectionPolicy:
+    """``policy`` as a proposer needs it: its re-ranked order stands, and ``gate``, the one
+    saved with the proposer, decides what is shown and how confidently.
     """
-    return replace(policy, order=CandidateOrder.AS_WRITTEN, gate=AbstainGate())
+    return replace(policy, order=CandidateOrder.AS_WRITTEN, gate=gate)
 
 
 def word_span(spans: Sequence[CharSpan], flag: CharSpan) -> WordSpan:

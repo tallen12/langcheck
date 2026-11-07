@@ -221,7 +221,7 @@ async def open_proposing_checker(
 ) -> CorrectionChecker:
     """The checker using a tagger and proposer with no LLM, loaded off the event loop."""
     proposing = await asyncio.to_thread(load, checkpoint, proposer, device=config.device)
-    policy = proposer_policy(config.policy())
+    policy = proposer_policy(config.policy(), proposing.gate)
     corrector = ProposerCorrector(proposing.source, proposing.trained.reader, policy)
     name = _name(f"tagger:{checkpoint.name}:proposer:{proposer.name}", policy)
     return _checker(corrector, proposing.trained, policy, name=name, model=proposer.name)
