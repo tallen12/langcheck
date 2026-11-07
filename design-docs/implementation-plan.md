@@ -689,9 +689,11 @@ in this order: steps 2 to 6 depend on each other, 7 and 8 stand alone, 9 needs 1
    error. The panel judges only edits the store lacks a verdict from it for.
 
    The panel runs on the Ollama server the settings already name, through its
-   OpenAI-compatible API, with reasoning on (judging is offline, so latency does not
-   matter). Of the models there, the default panel is three general instruction models
-   from different families: `qwen3:14b`, `gemma4:12b-it-q4_K_M` and `llama3.1:latest`
+   OpenAI-compatible API, with reasoning off by default: with it on, the first 100
+   CWEB-G dev sentences took about 25 minutes per judge, which puts a full set at days.
+   `--think` turns it on; those verdicts are stored under `+think` judges, apart. Of the
+   models there, the default panel is three general instruction models from different
+   families: `qwen3:14b`, `gemma4:12b-it-q4_K_M` and `llama3.1:latest`
    (8B). `qwen3.5:9b-q8_0` stands in for a member that shares a family with the
    corrector being measured, such as `gemma4` while it is the configured LLM. Coding
    models and the grammar fine-tunes on the server (`karen-editor`,

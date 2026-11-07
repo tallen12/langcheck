@@ -127,6 +127,20 @@ def test_a_judge_of_the_correctors_family_gives_way_to_the_standby(tmp_path: Pat
     assert "panel: judge-a:1b, judge-b:1b, judge-d:1b (quorum 2)" in cli.output
 
 
+def test_judges_that_reason_are_stored_and_shown_apart(tmp_path: Path) -> None:
+    fetched(tmp_path)
+    models = ("--models", *PANEL)
+
+    code, cli = run(tmp_path, JudgeServer(), "judge", "run", "cweb-g-dev", *models, *URL, "--think")
+    _, plain = run(tmp_path, JudgeServer(), "judge", "show", "cweb-g-dev", *models)
+
+    assert code == 0, cli.err
+    stored = JsonlJudgmentStore(store_path(tmp_path / "data" / "judgments", "cweb-g-dev")).load()
+    assert {j.judge for j in stored} == {judge_name(m, think=True) for m in PANEL}
+    assert "gold edits: 1 (valid 1" in cli.output
+    assert "gold edits: 1 (valid 0, neutral 0, wrong 0, disputed 0, pending 1)" in plain.output
+
+
 def test_unusable_replies_fail_the_run_and_store_nothing(tmp_path: Path) -> None:
     fetched(tmp_path)
 
@@ -144,7 +158,9 @@ def test_unusable_replies_fail_the_run_and_store_nothing(tmp_path: Path) -> None
     )
 
     assert code == 2
-    assert f"{judge_name('judge-a:1b')}: judged 0, already had 0, failed 1" in cli.output
+    assert (
+        f"{judge_name('judge-a:1b', think=False)}: judged 0, already had 0, failed 1" in cli.output
+    )
     assert not (tmp_path / "data" / "judgments").exists()
 
 

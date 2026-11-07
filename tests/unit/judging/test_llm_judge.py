@@ -60,15 +60,26 @@ def test_a_sentence_without_edits_asks_only_whether_an_error_is_left() -> None:
     assert "Edits: none" in user.content
 
 
-def test_verdicts_come_back_in_candidate_order_with_reasoning_on() -> None:
+def test_verdicts_come_back_in_candidate_order_without_reasoning() -> None:
     llm = ScriptedLLM([reply((2, "neutral"), (1, "valid"), left=True)])
     judge = LLMEditJudge(llm, "qwen3:14b")
 
     result = asyncio.run(judge.judge(ITEM))
 
     assert result == Judged(((Verdict.VALID, "because"), (Verdict.NEUTRAL, "because")), True, "ok")
+    assert not llm.options[0].think
+    assert judge.name == f"llm:qwen3:14b@{JUDGE_PROMPT_VERSION}"
+    assert judge.name == judge_name("qwen3:14b", think=False)
+
+
+def test_judges_that_reason_are_stored_apart() -> None:
+    llm = ScriptedLLM([reply((1, "valid"), (2, "valid"))])
+    judge = LLMEditJudge(llm, "qwen3:14b", think=True)
+
+    asyncio.run(judge.judge(ITEM))
+
     assert llm.options[0].think
-    assert judge.name == f"llm:qwen3:14b@{JUDGE_PROMPT_VERSION}" == judge_name("qwen3:14b")
+    assert judge.name == f"llm:qwen3:14b@{JUDGE_PROMPT_VERSION}+think"
 
 
 def test_a_reply_that_misnumbers_the_edits_is_not_judged() -> None:

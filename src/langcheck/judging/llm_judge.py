@@ -17,6 +17,7 @@ from langcheck.llm.structured import Failed, Parsed, complete_structured
 
 JUDGE_PROMPT_VERSION = "judge-v1"
 LLM_JUDGE_PREFIX = "llm"
+THINK_SUFFIX = "+think"
 
 SYSTEM_PROMPT = """You judge corrections to English sentences written by learners and \
 by fluent writers. For each numbered edit, applied alone to the original sentence, decide:
@@ -54,15 +55,18 @@ class JudgeReply(BaseModel):
 class LLMEditJudge:
     """Asks one model, by name, to judge every edit of a sentence in one request."""
 
-    def __init__(self, llm: AsyncLLMClient, model: str, *, think: bool = True) -> None:
+    def __init__(self, llm: AsyncLLMClient, model: str, *, think: bool = False) -> None:
         self._llm = llm
         self._model = model
+        self._think = think
         self._options = ChatOptions(think=think, schema_name="judgment")
 
     @property
     def name(self) -> str:
-        """``llm:<model>@<prompt version>``: a new prompt version judges again."""
-        return judge_name(self._model)
+        """``llm:<model>@<prompt version>``, plus ``+think`` with reasoning on: a new prompt
+        version or reasoning mode judges again.
+        """
+        return judge_name(self._model, think=self._think)
 
     async def judge(self, item: Item) -> JudgeResult:
         """A verdict on each candidate of ``item``; ``NotJudged`` if the reply is unusable."""
@@ -76,9 +80,10 @@ class LLMEditJudge:
                 return judged(reply, len(item.candidates))
 
 
-def judge_name(model: str) -> str:
+def judge_name(model: str, *, think: bool) -> str:
     """The store name of the LLM judge on ``model`` with the current prompt."""
-    return f"{LLM_JUDGE_PREFIX}:{model}@{JUDGE_PROMPT_VERSION}"
+    suffix = THINK_SUFFIX if think else ""
+    return f"{LLM_JUDGE_PREFIX}:{model}@{JUDGE_PROMPT_VERSION}{suffix}"
 
 
 def judge_messages(item: Item) -> list[ChatMessage]:

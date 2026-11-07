@@ -60,6 +60,9 @@ type CorrectionsOption = Annotated[
     list[Path] | None,
     Parameter(help="JSONL of text and corrected, from a run on the set; repeatable."),
 ]
+type ThinkOption = Annotated[
+    bool, Parameter(negative=(), help="Judges reason before answering: slower, stored apart.")
+]
 type LimitOption = Annotated[int | None, Parameter(help="Only the first N sentences.")]
 type StoreOption = Annotated[Path | None, Parameter(help="Default data/judgments.")]
 type DataOption = Annotated[Path | None, Parameter(help="Default data/eval.")]
@@ -103,7 +106,7 @@ def judge_app(env: CliEnvironment, *, settings: SettingsLoader, guarded: Guard) 
         corrections: CorrectionsOption = None,
         limit: LimitOption = None,
         concurrency: Annotated[int, Parameter(help="Requests at once.")] = DEFAULT_CONCURRENCY,
-        no_think: Annotated[bool, Parameter(negative=(), help="Turn reasoning off.")] = False,
+        think: ThinkOption = False,
         store: StoreOption = None,
         data: DataOption = None,
         config: Annotated[Path | None, Parameter(help="YAML settings file.")] = None,
@@ -129,7 +132,7 @@ def judge_app(env: CliEnvironment, *, settings: SettingsLoader, guarded: Guard) 
                     items,
                     judgments,
                     concurrency=concurrency,
-                    think=not no_think,
+                    think=think,
                     env=env,
                 )
             )
@@ -138,7 +141,7 @@ def judge_app(env: CliEnvironment, *, settings: SettingsLoader, guarded: Guard) 
                 if result.failures:
                     line += f", failed {len(result.failures)} ({result.failures[0]})"
                 env.out(line)
-            names = [judge_name(model) for model in panel]
+            names = [judge_name(model, think=think) for model in panel]
             summary = summarize_panel(items, judgments.load(), names, quorum=quorum)
             env.out(render_summary(summary))
             env.out(f"judgments: {store_path(store or env.cwd / DEFAULT_STORE, dataset.value)}")
@@ -157,6 +160,7 @@ def judge_app(env: CliEnvironment, *, settings: SettingsLoader, guarded: Guard) 
         quorum: QuorumOption = DEFAULT_QUORUM,
         corrections: CorrectionsOption = None,
         limit: LimitOption = None,
+        think: ThinkOption = False,
         store: StoreOption = None,
         data: DataOption = None,
     ) -> int:
@@ -170,7 +174,7 @@ def judge_app(env: CliEnvironment, *, settings: SettingsLoader, guarded: Guard) 
             items = items_for(dataset, corrections or (), limit, data)
             if items is None:
                 return FAILED
-            names = [judge_name(model) for model in panel]
+            names = [judge_name(model, think=think) for model in panel]
             summary = summarize_panel(items, store_for(dataset, store).load(), names, quorum=quorum)
             env.out(render_summary(summary))
             return CLEAN
