@@ -10,7 +10,7 @@ from typing import Annotated, Final, Protocol, assert_never
 from cyclopts import App, Parameter
 
 from langcheck.cli.environment import CliEnvironment
-from langcheck.cli.tagging import read_pair_file
+from langcheck.cli.tagging import read_training_pair_file
 from langcheck.evaluation.context_pairs import write_pairs
 from langcheck.evaluation.detokenize import detokenize
 from langcheck.evaluation.m2 import AnnotatedSentence
@@ -249,7 +249,7 @@ def noise_app(env: CliEnvironment, *, runtime: NoiseRuntime, guarded: Guard) -> 
         """Train a noise model to write corrected sentences back with their errors."""
 
         def run() -> int:
-            found = [s for path in pairs for s, _ in read_pair_file(path)]
+            found = [s for path in pairs for s, _ in read_training_pair_file(path)]
             runtime.train(
                 found[:limit],
                 start=Base(model) if start_from is None else Saved(start_from),
@@ -297,7 +297,7 @@ def noise_app(env: CliEnvironment, *, runtime: NoiseRuntime, guarded: Guard) -> 
                 return FAILED
             found = list(clean_sentences(read_texts(clean), context_sentences=context))[:limit]
             mix = kind_mix(
-                [s for path in kinds_from for s, _ in read_pair_file(path)], counts=errors
+                [s for path in kinds_from for s, _ in read_training_pair_file(path)], counts=errors
             )
             rng = random.Random(seed)
             requests = [mix.draw(rng) for _ in found]

@@ -9,7 +9,12 @@ from typing import Annotated, Protocol, assert_never
 from cyclopts import App, Parameter
 
 from langcheck.cli.environment import CliEnvironment
-from langcheck.evaluation.context_pairs import read_pairs
+from langcheck.evaluation.context_pairs import (
+    EvaluationDataError,
+    Origin,
+    pairs_origin,
+    read_pairs,
+)
 from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.examples import load_examples
 from langcheck.evaluation.m2 import AnnotatedSentence, read_m2
@@ -45,6 +50,18 @@ def read_pair_file(path: Path) -> list[tuple[AnnotatedSentence, str]]:
     if path.suffix == PAIRS_SUFFIX:
         return read_pairs(text)
     return [(sentence, "") for sentence in read_m2(text)]
+
+
+def read_training_pair_file(path: Path) -> list[tuple[AnnotatedSentence, str]]:
+    """As :func:`read_pair_file`, for training: pairs made from an evaluation set are
+    refused.
+    """
+    if path.suffix == PAIRS_SUFFIX and (
+        pairs_origin(path.read_text(encoding="utf-8")) is Origin.EVALUATION
+    ):
+        msg = f"{path} was made from an evaluation set; validate or score on it instead"
+        raise EvaluationDataError(msg)
+    return read_pair_file(path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,8 +334,8 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
         return TrainingMix(
             corrected=corrected,
             clean=tuple(read_texts(clean)) if clean is not None else (),
-            pairs=tuple(pair for path in pairs or () for pair in read_pair_file(path)),
-            tables=tuple(s for path in tables or () for s, _ in read_pair_file(path)),
+            pairs=tuple(pair for path in pairs or () for pair in read_training_pair_file(path)),
+            tables=tuple(s for path in tables or () for s, _ in read_training_pair_file(path)),
             errors=tuple(errors or ()),
         )
 

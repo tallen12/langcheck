@@ -19,7 +19,7 @@ from langcheck.cli.tagging import (
     render_flag,
     tagger_app,
 )
-from langcheck.evaluation.context_pairs import write_pairs
+from langcheck.evaluation.context_pairs import EvaluationDataError, Origin, write_pairs
 from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.m2 import AnnotatedSentence, GoldEdit, read_m2
 from langcheck.synthesis.training_mix import TrainingMix, TrainingMixError
@@ -543,3 +543,39 @@ def test_pairs_keep_context_and_validation_mixes_named_sets(
     assert len(validation) == 100 + 1
     assert {item.source for item in validation[:-1]} == {"held-out"}
     assert validation[-1] == InContext(pair, "It was late.", "writers")
+
+
+def test_training_refuses_pairs_made_from_an_evaluation_set(tmp_path: Path) -> None:
+    pair = AnnotatedSentence(("He", "go", "."), ((GoldEdit(1, 2, ("goes",), "R:VERB:SVA"),),))
+    marked = tmp_path / "eval.jsonl"
+    marked.write_text(write_pairs([(pair, "")], origin=Origin.EVALUATION), encoding="utf-8")
+    runtime = FakeRuntime()
+
+    with pytest.raises(EvaluationDataError, match="evaluation set"):
+        run(Cli(tmp_path), runtime, "train", "out", "--pairs", str(marked))
+    with pytest.raises(EvaluationDataError):
+        run(
+            Cli(tmp_path),
+            runtime,
+            "train",
+            "out",
+            "--clean",
+            prose(tmp_path),
+            "--tables",
+            str(marked),
+        )
+    assert (
+        run(
+            Cli(tmp_path),
+            runtime,
+            "train",
+            "out",
+            "--clean",
+            prose(tmp_path),
+            "--validate-on",
+            str(marked),
+        )
+        == 0
+    )
+
+    assert runtime.validate_on == [{"eval": 1}]

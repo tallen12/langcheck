@@ -31,9 +31,11 @@ from langcheck.cli.noising import TransformerNoiseRuntime, noise_app
 from langcheck.cli.proposing import TransformerProposerRuntime, proposer_app
 from langcheck.cli.render import render_check, render_context
 from langcheck.cli.suggesting import suggest_app
+from langcheck.cli.synthesizing import synth_app
 from langcheck.cli.tagging import TransformerRuntime, tagger_app
 from langcheck.cli.watching import watch_file
 from langcheck.database.schema import open_database
+from langcheck.evaluation.context_pairs import EvaluationDataError, PairsError
 from langcheck.evaluation.datasets import DatasetError
 from langcheck.evaluation.m2 import M2Error
 from langcheck.llm.models import LLMError
@@ -77,6 +79,8 @@ _EXPECTED_FAILURES = (
     DatasetError,
     M2Error,
     TrainingMixError,
+    EvaluationDataError,
+    PairsError,
     httpx.HTTPError,
     OSError,
 )
@@ -133,6 +137,7 @@ def build_app(env: CliEnvironment) -> App:
     app.command(tagger_app(env, runtime=TransformerRuntime(), guarded=guarded))
     app.command(proposer_app(env, runtime=TransformerProposerRuntime(), guarded=guarded))
     app.command(noise_app(env, runtime=TransformerNoiseRuntime(), guarded=guarded))
+    app.command(synth_app(env, guarded=guarded))
     app.command(
         suggest_app(env, runtime=TransformerRuntime(), settings=client_settings, guarded=guarded)
     )

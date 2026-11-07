@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Annotated, Protocol, assert_never
 from cyclopts import App, Parameter
 
 from langcheck.cli.environment import CliEnvironment
-from langcheck.cli.tagging import read_pair_file
+from langcheck.cli.tagging import read_pair_file, read_training_pair_file
 from langcheck.correction.measure import CorrectionReport, Strategy
 from langcheck.correction.models import AbstainGate
 from langcheck.evaluation.datasets import Dataset, dataset_files
@@ -567,8 +567,12 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
                 mix=TrainingMix(
                     corrected=corrected,
                     clean=tuple(read_texts(clean)) if clean is not None else (),
-                    pairs=tuple(pair for path in pairs or () for pair in read_pair_file(path)),
-                    tables=tuple(s for path in tables or () for s, _ in read_pair_file(path)),
+                    pairs=tuple(
+                        pair for path in pairs or () for pair in read_training_pair_file(path)
+                    ),
+                    tables=tuple(
+                        s for path in tables or () for s, _ in read_training_pair_file(path)
+                    ),
                     errors=tuple(errors or ()),
                 ),
                 false_alarms=TierPolicy(
@@ -647,7 +651,7 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
             if tested is None:
                 return FAILED
             sets = (
-                (tune_on.stem, [sentence for sentence, _ in read_pair_file(tune_on)], True),
+                (tune_on.stem, [s for s, _ in read_training_pair_file(tune_on)], True),
                 (test_on.value, tested, False),
             )
             for set_name, found, tunes in sets:

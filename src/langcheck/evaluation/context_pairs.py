@@ -3,9 +3,13 @@
 M2 has no place for context, so pairs taken from whole texts (such as OmniGEC's
 Wikipedia and Reddit edits) are kept as JSONL: ``{"tokens": [...], "edits": [{"start",
 "end", "correction", "code"}], "context": "..."}``, with one annotator per sentence.
+
+A line made from an evaluation set, such as errors drawn from its tables, also carries
+``"origin": "evaluation"``: it may be validated or scored on but never trained on.
 """
 
 from collections.abc import Sequence
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -14,6 +18,19 @@ from langcheck.evaluation.m2 import AnnotatedSentence, GoldEdit
 
 class PairsError(ValueError):
     """A line is not a valid sentence with its edits."""
+
+
+class Origin(StrEnum):
+    """What a pair may be used for."""
+
+    OPEN = "open"
+    """Anything, training included."""
+    EVALUATION = "evaluation"
+    """Made from an evaluation set, so only evaluated on."""
+
+
+class EvaluationDataError(Exception):
+    """Pairs made from an evaluation set were given to training."""
 
 
 class _Edit(BaseModel):
@@ -31,6 +48,7 @@ class _Pair(BaseModel):
     tokens: tuple[str, ...]
     edits: tuple[_Edit, ...] = ()
     context: str = ""
+    origin: Origin = Origin.OPEN
 
     @model_validator(mode="after")
     def _edits_fit(self) -> _Pair:
@@ -41,24 +59,41 @@ class _Pair(BaseModel):
         return self
 
 
-def read_pairs(text: str) -> list[tuple[AnnotatedSentence, str]]:
-    """Every sentence in ``text`` with the text before it."""
-    pairs: list[tuple[AnnotatedSentence, str]] = []
+def _parsed(text: str) -> list[_Pair]:
+    found: list[_Pair] = []
     for number, line in enumerate(text.splitlines(), start=1):
         if not line.strip():
             continue
         try:
-            pair = _Pair.model_validate_json(line)
+            found.append(_Pair.model_validate_json(line))
         except ValidationError as error:
             msg = f"line {number}: {error}"
             raise PairsError(msg) from error
+    return found
+
+
+def read_pairs(text: str) -> list[tuple[AnnotatedSentence, str]]:
+    """Every sentence in ``text`` with the text before it."""
+    pairs: list[tuple[AnnotatedSentence, str]] = []
+    for pair in _parsed(text):
         edits = tuple(GoldEdit(e.start, e.end, e.correction, e.code) for e in pair.edits)
         pairs.append((AnnotatedSentence(pair.tokens, (edits,)), pair.context))
     return pairs
 
 
-def write_pairs(pairs: Sequence[tuple[AnnotatedSentence, str]]) -> str:
-    """``pairs`` as JSONL, keeping each sentence's first annotator."""
+def pairs_origin(text: str) -> Origin:
+    """``EVALUATION`` when any line of ``text`` was made from an evaluation set."""
+    if any(pair.origin is Origin.EVALUATION for pair in _parsed(text)):
+        return Origin.EVALUATION
+    return Origin.OPEN
+
+
+def write_pairs(
+    pairs: Sequence[tuple[AnnotatedSentence, str]], *, origin: Origin = Origin.OPEN
+) -> str:
+    """``pairs`` as JSONL, keeping each sentence's first annotator; an ``origin`` other
+    than open is written on every line.
+    """
     lines = [
         _Pair(
             tokens=sentence.tokens,
@@ -67,7 +102,8 @@ def write_pairs(pairs: Sequence[tuple[AnnotatedSentence, str]]) -> str:
                 for e in (sentence.annotators[0] if sentence.annotators else ())
             ),
             context=context,
-        ).model_dump_json()
+            origin=origin,
+        ).model_dump_json(exclude={"origin"} if origin is Origin.OPEN else None)
         for sentence, context in pairs
     ]
     return "".join(f"{line}\n" for line in lines)
