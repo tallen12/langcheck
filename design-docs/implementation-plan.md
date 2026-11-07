@@ -564,8 +564,14 @@ these) and scores it with ERRANT span-level F0.5, per kind. Use it to compare mo
 prompts, set `ScoringPolicy` per kind, measure how many LLM edits validation rejects,
 and record latency per chunk. Compare against contcheck's tagger on the same sets.
 
-As built: `langcheck evaluate fetch` downloads BEA-2019 dev, CoNLL-2014 test (M2) or
-JFLEG dev (references) once into `data/eval/`. `evaluate run` checks every sentence as
+As built: `langcheck evaluate fetch` downloads BEA-2019 dev, CoNLL-2014 test, CWEB
+(general and sponsored web pages, dev and test; M2) or JFLEG dev (references) once into
+`data/eval/`. These sets are for evaluation only: their licences allow research or
+non-commercial use, so nothing that ships (a model, a gate, tuned weights) is trained or
+fitted on them. Training reads only `--clean` prose, `--pairs` and `--tables` files passed
+to it, and corrupts prose with built-in error tables written by hand
+(`synthesis.default_tables`). CWEB comes from fluent writers, with few errors per sentence,
+which is closer to this checker's users than the learner essays of BEA-2019. `evaluate run` checks every sentence as
 its own text with an empty context (one chunk per check, so the timing is chunk
 latency), applies each suggestion's best option, extracts the edits with ERRANT
 (`eval` extra) and scores them against each sentence's best annotator, per kind through
@@ -645,6 +651,152 @@ distilroberta-base):
 - Validation rejected 63 of the LLM's issues on CoNLL-2014 (200 sentences) and 357 on
   BEA-2019 (1,000 sentences), mostly as too large or as no change.
 
+### Realistic evaluation
+
+Scoring against gold edits is unreliable on the sets that look most like this checker's
+users. OmniGEC and WikEd gold mixes style edits with error fixes and leaves errors
+uncorrected, and CWEB's two annotators often disagree. Style edits in gold lower recall,
+and uncorrected errors turn right fixes into false positives, so precision (what matters
+most for experienced writers) reads low and tuning chases the wrong errors. Training on
+synthetic errors alone risks fitting the noise model, so evaluation needs real errors
+from outside that distribution.
+
+The plan judges edits instead of trusting gold alone. It is built on `feat/realistic-eval`
+in this order: steps 2 to 6 depend on each other, 7 and 8 stand alone, 9 needs 1 and 3.
+
+1. **Baseline under the new rules.** Retrain the tagger and proposer on corrupted clean
+   prose (built-in tables, noise-model pairs, `--tables`) and record raw ERRANT scores on
+   CWEB-G and CWEB-S dev, JFLEG dev, CoNLL-2014, the odd half of the OmniGEC holdout and
+   WikEd. Every later number is compared with this one.
+2. **Judgment store.** Each unique edit, keyed by its sentence and the span and words it
+   writes, is judged as *valid* (fixes an error), *neutral* (acceptable but not needed,
+   such as style) or *wrong*, with who judged it (an LLM by model and prompt version, or a
+   person) and a short reason. Every judge's verdict is kept, not only the consensus.
+   Gold edits are judged the same way, so style-only gold can leave the recall
+   denominator. Judgments are pooled across every system and run on a set, so a new run
+   only needs its new edits judged. The store is JSONL under `data/judgments/<set>/`,
+   never committed: CWEB's ShareAlike licence covers anything derived from it.
+3. **A panel of LLM judges.** An `EditJudge` protocol with an adapter on the
+   OpenAI-compatible client; a panel holds several judges, each a different model, ideally
+   from different families. Each judge gets one request per sentence: the sentence, its
+   context and every pooled edit, each shown applied alone, and answers in a schema with a
+   verdict per edit. One request per sentence instead of per edit cuts the calls several
+   times over, and the same answer says whether an error is left. An edit's consensus is the verdict most judges give, at a quorum
+   set per run (two of three by default); an edit below quorum is *disputed* and has no
+   consensus until a person decides it. None of the judges may share a family with the
+   corrector being measured, or the LLM corrector is favoured over the local proposer.
+   Each judge also says whether the sentence, with the valid edits applied, still has an
+   error. The panel judges only edits the store lacks a verdict from it for.
+
+   The panel runs on the Ollama server the settings already name, through its
+   OpenAI-compatible API, with reasoning off by default: with it on, the first 100
+   CWEB-G dev sentences took about 25 minutes per judge, which puts a full set at days.
+   `--think` turns it on; those verdicts are stored under `+think` judges, apart. Of the
+   models there, the default panel is `qwen3:14b`, `gemma4:12b-it-q4_K_M` and
+   `qwen3.5:9b-q8_0`. The third seat was first `llama3.1:latest` (8B), the only other
+   family; on the first 100 CWEB-G dev sentences it called most edits neutral with
+   one-word reasons and matched the other two judges where they agreed only 17% of the
+   time, against 79% for `qwen3.5`, which gave a real reason for every verdict.
+   `deepseek-r1:8b` matched 91% but by calling nearly everything valid with one-word
+   reasons, and failed 28 sentences that had no corrections by rating edits that were not
+   there. So two judges share the qwen family; family diversity gave way to quality.
+   `deepseek-r1:8b` stands in for a member that shares a family with the corrector being
+   measured, such as `gemma4` while it is the configured LLM; a qwen corrector cannot be
+   measured with this panel. Coding models and the grammar fine-tunes on the server
+   (`karen-editor`, `mistral-grammar-checker`) are correctors, not judges, and are left
+   out. Judges this
+   small disagree more than large hosted ones, so the audit in step 6 decides whether the
+   panel is good enough or needs a stronger member.
+
+   *As built (steps 2 and 3):* `langcheck judge run SET` pools the set's gold edits with
+   the edits of any `--corrections` files (JSONL of `text` and `corrected`), runs the
+   judges one model after another so the server loads each once, and appends every answer
+   to `data/judgments/<set>/judgments.jsonl` as it arrives. Judges are stored as
+   `llm:<model>@judge-v1`, so a new prompt version judges again. `--corrector MODEL`
+   swaps a judge of that model's family for `--standby`. `langcheck judge show SET` prints
+   the consensus from the store without judging: edits by source and verdict, disputed
+   and pending counts, sentences with an error left, each judge's verdicts and how often
+   each pair of judges agrees. Evaluate reports do not keep each sentence's edits, so a
+   run's edits reach the panel only through a corrections file for now.
+
+   *Prompt `judge-v2`*, after reading the first 100 `judge-v1` verdicts on CWEB-G dev:
+
+   - **Published text.** CWEB's M2 tokens split hyphenated words (`build - up`), which
+     cannot be rejoined from tokens, so judges reported errors the writer never made.
+     CWEB sets now also fetch the sentences as published (`data/raw/*.source`, one per
+     M2 sentence); the judge sees them, and edits are applied to the published
+     characters. The checker gets the published sentence too whenever it tokenizes to the
+     set's tokens, so CWEB scores from before this change are not comparable.
+   - **Whole corrections.** Each annotator's or run's correction is shown whole, with its
+     edits listed under it, and every edit is judged with the rest of its correction
+     applied. Identical corrections are shown once with their makers' labels joined.
+   - **Linked edits.** Each verdict lists the other edits of the same correction it only
+     works with: a moved word's removal and insertion, paired quotes or brackets, words
+     that must agree. Moves and paired marks are also found from their shape. Linked
+     edits are *non-local* fixes: the proposer only proposes edits within one span, so it
+     cannot make them yet. They are stored with their links (`linked` on each edit
+     judgment), counted apart in `judge show`, and must stay marked in clean sets and
+     training data so a future non-local model can train on them and the local proposer
+     is not scored or trained against them.
+   - **Preference.** When a sentence has several corrections, each judge names the one
+     that fixes it best, a tie, or none. Per-edit verdicts are kept, so a checker that
+     makes either of two valid fixes is not penalized; the preference picks which
+     correction a clean set uses as its main reference.
+
+   On the first 100 CWEB-G dev sentences, `judge-v2` cut gold edits judged wrong from 18
+   to 5 and sentences with an error left from 16 to 10, and found 8 of 62 gold edits
+   linked. *Prompt `judge-v3`* fixes what was left: an edit shared by two corrections is
+   listed in full once (judges rated it once per correction, and the repeated number
+   failed the reply; repeats that agree are now merged), and an inserted hyphen joins the
+   words on both sides ("larger-than-life", not "larger - than - life"). Reasons are
+   capped at 200 characters in the reply schema and requests at 1,024 tokens, since
+   `llama3.1` sometimes repeated a reason until the proxy timed out.
+4. **Clean sets.** Rewrite a set from the consensus: keep gold edits judged valid, drop
+   those judged neutral or wrong, and add edits from any run judged valid that overlap no
+   kept edit. A sentence the panel says still has an error that no pooled edit fixes, or
+   that has a disputed edit, is left out and counted. The result is JSONL pairs with
+   context. The preferred correction is the main reference and other valid corrections
+   are kept as further annotators. Each edit carries its scope, local or linked, so a
+   model that only makes local edits is scored and trained on local edits alone. One
+   made from an evaluation set is marked as evaluation data (see
+   `langcheck synth`) and is only evaluated on; one made from a corpus whose licence
+   allows it, such as the OmniGEC training side, may also be trained on.
+
+   *As built:* `langcheck judge clean SET` writes the gold side (run edits are not added
+   yet) to `clean-<scope>.jsonl` beside the set's judgments: `text` as published,
+   `corrected` (the main reference), `alternatives` (the other valid corrections) and
+   `linked`. Without an agreed preference, the correction with most valid edits leads. A
+   correction whose edits were all rejected is dropped as a reference when another one
+   fixes something, or a checker that changes nothing would match it. `--scope local`
+   (the default) leaves out sentences that need a linked edit; `--scope all` keeps them
+   with `linked` set. Pending and disputed sentences are left out too, each reason
+   counted. `langcheck suggest measure-file` reads the file directly and scores each
+   alternative as another annotator.
+5. **Judged scores.** Reports keep raw ERRANT F0.5 and add scores against the clean set:
+   precision is gold matches plus edits judged valid, over all edits except neutral ones;
+   recall is over gold edits judged valid. Reports show how many edits have a consensus
+   and how many are disputed, and judged scores are not given below full coverage.
+6. **Human audit.** Export disputed edits, edits where the consensus disagrees with gold
+   and a random sample of consensus verdicts for review; imported human verdicts override
+   the panel. Reports give each judge's and the consensus's agreement with people, which
+   says how far to trust steps 4 and 5 and which judges to keep.
+7. **False alarms on clean prose.** Flags per 1,000 words on held-out edited prose that
+   was not trained on. Nearly every flag there is wrong; the panel triages a sample for
+   the true rate. It needs no gold and is the closest measure of what an experienced
+   writer sees.
+8. **Cross-noise gap.** Score on held-out prose corrupted by a distribution the model was
+   not trained with, against the same prose corrupted by its own training noise.
+   `langcheck synth corrupt` writes either: the built-in tables, tables learned from
+   labeled pairs (`--tables`), or from a fetched evaluation set (`--from-set`, marked as
+   evaluation data and refused by training). The noise model gives a third. A large gap
+   means the model fits its noise rather than errors.
+9. **Gate refit.** Fit `AbstainGate` from judged corrections on pairs that are not an
+   evaluation set and save it with `langcheck proposer gate`. Each proposer loads the
+   `gate.json` beside it; one without a gate offers every correction the other filters
+   pass. The PLL filters tuned on BEA-2019 dev are retuned the same way.
+10. **Locked test splits.** CWEB test sets only produce reported numbers. Tuning, epoch
+    choice and gate fitting use dev sets or files passed in, never a test split.
+
 ## Features
 
 Each milestone is built as one or more features (see the `git-workflow` skill): one
@@ -664,12 +816,18 @@ depend on each other.
 | `feat/vscode` | M4 | Editor client. | LSP proxy (`langcheck lsp`); TypeScript extension in `editors/vscode/`, `just vscode` and its CI job |
 | `feat/libreoffice` | M5 | LibreOffice client. | Spike; UNO proofreader; import-rule check; `just libreoffice` and its CI job |
 | `feat/evaluation` | M6 | Measuring and tuning. | `evaluate` command with ERRANT scoring; `ScoringPolicy` tuning; model and prompt comparison |
+| `feat/realistic-eval` | M6 | Evaluation not bound to noisy gold. | CWEB and evaluation-only sets, gate loaded per proposer, `synth corrupt`, judgment store, judge panel and consensus (done); baseline; clean sets; judged scores; human audit; false alarms on clean prose; cross-noise gap; gate refit |
 
 A feature that grows past the limit while being built is split at a task boundary into a
 second feature that lands after it.
 
 ## Open questions
 
+- **Is the local judge panel good enough.** The panel in *Realistic evaluation* uses
+  three 8–15B models on the Ollama server. Whether their consensus agrees with people
+  often enough, and whether two of three is the right quorum, is decided by the audit.
+- **How much human review.** The audit's size sets how far judged scores can be trusted;
+  a few hundred verdicts per set is the working guess.
 - **Default LLM model.** Any OpenAI-compatible server works; which model to recommend is
   decided by M6 on accuracy and latency (live editing needs about 1–3 s per chunk). Only
   qwen3:8b has been evaluated so far: F0.5 0.24–0.31 at p50 1.8 s per chunk.
@@ -685,6 +843,11 @@ second feature that lands after it.
 - **Whole-sentence options vs span options.** The plan scores span replacements inside
   the original sentence. If the LLM often needs several linked edits (agreement across a
   clause), allow an issue to carry a multi-span edit.
+- **Non-local edits.** The proposer proposes a replacement for one span at a time, so
+  fixes whose edits only work together (a moved word, paired quotes, agreement across a
+  clause) are out of its reach. The judge panel marks these as linked; how often they
+  occur in each set decides when to extend the model, for example with multi-span
+  proposals or a sentence-level rewrite stage, trained on the data marked linked.
 - **Local proposer instead of the LLM.** `correction.proposer` swaps the LLM for a 39 MB
   decoder on the frozen tagger (`langcheck proposer train`), with `AbstainGate` hiding
   corrections unlikely to help. On the LLM's 500 `bea19-dev` sentences F0.5 is 0.460 against
@@ -692,13 +855,18 @@ second feature that lands after it.
   gain -52 against -116: it hurts less but finds less. The gate was fitted on other
   sentences of both sets. On CPU it took 2.1 s at p50 and 5.5 s at p90 per flagged sentence,
   before the gate.
-- **Training on corrupted text.** `--synthetic` inverts gold edits at their real rates and
-  `--clean` corrupts known-clean text the same way. A proposer trained with both, on the
-  same tagger and without refitting the gate, moves F0.5 from 0.471 to 0.503 on the first 500
-  `bea19-dev` sentences, 0.286 to 0.380 on 500 WikEd sentences and 0.545 to 0.587 on JFLEG
-  dev. A tagger trained with both is no better: at matching precision its recall is the same
-  or slightly lower. Refitting the gate and more epochs are untried; the last epoch was the
-  best.
+- **Training on corrupted text.** Training now uses only corrupted `--clean` prose and
+  `--pairs` passed in, with built-in error tables and optional learned `--tables`. The
+  earlier `--synthetic` (gold edits of BEA-2019 and FCE training sets inverted at their real
+  rates) and `--no-real` are gone with those sets. With `--synthetic` and `--clean`, a
+  proposer on the same tagger, without refitting the gate, moved F0.5 from 0.471 to 0.503 on
+  the first 500 `bea19-dev` sentences, 0.286 to 0.380 on 500 WikEd sentences and 0.545 to
+  0.587 on JFLEG dev; a tagger trained with both was no better. Models trained only on the
+  built-in tables are not measured yet. `proposer train`'s epoch scoring and `proposer
+  measure`'s tuning were fitted on `bea19-dev`; they now take a pairs file
+  (`--score-with`, `--tune-on`). The gate's weights moved from the code to a `gate.json`
+  beside each proposer; the weights fitted partly on `bea19-dev` are no longer built in,
+  and a gate fitted off evaluation data is still to come.
 - **Larger context.** Context is two previous sentences of plain text in the encoder's input,
   capped at 256 tokens. A separate, larger context feature might help; nothing is measured.
 - **Scaling past one process.** Redis or SQL adapters for `DocumentStore` and

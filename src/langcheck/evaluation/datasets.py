@@ -1,7 +1,11 @@
-"""The annotated sets the plan evaluates and trains on, and fetching them.
+"""The annotated sets the plan evaluates on, and fetching them.
 
 Files are kept under ``data/eval/<name>/`` (``/data/`` is not committed). Each set is
 downloaded once, as published, and only the files it needs are unpacked.
+
+Every set here is for evaluation only. Their licences allow research or non-commercial
+use, so none of them may train a model, fit a gate or choose weights that ship: training
+reads only prose and pairs passed to it, and built-in error tables.
 """
 
 import tarfile
@@ -20,8 +24,10 @@ class Dataset(StrEnum):
     BEA19_DEV = "bea19-dev"
     CONLL14_TEST = "conll14-test"
     JFLEG_DEV = "jfleg-dev"
-    BEA19_TRAIN = "bea19-train"
-    FCE_TRAIN = "fce-train"
+    CWEB_G_DEV = "cweb-g-dev"
+    CWEB_S_DEV = "cweb-s-dev"
+    CWEB_G_TEST = "cweb-g-test"
+    CWEB_S_TEST = "cweb-s-test"
 
 
 class Format(StrEnum):
@@ -37,7 +43,9 @@ class Format(StrEnum):
 class Source:
     """Where a set is published and which archive members it uses.
 
-    For ``M2`` the one member is the M2 file; for ``REFERENCES`` the first member is the
+    For ``M2`` the first member is the M2 file and an optional second one the sentences as
+    published, one per M2 sentence (tokenization splits words such as "build-up", which
+    cannot be rejoined from tokens alone); for ``REFERENCES`` the first member is the
     source sentences and the rest one reference each, line by line.
     """
 
@@ -46,6 +54,11 @@ class Source:
     format: Format
     licence: str
 
+
+CWEB_URL = "https://github.com/SimonHFL/CWEB/archive/refs/heads/master.zip"
+CWEB_LICENCE = "CWEB (Flachs et al. 2020), CC BY-NC-SA 4.0; web text from Common Crawl"
+"""Corrected websites: edited prose by fluent writers, with few errors and two annotators.
+The G sets are general pages and the S sets sponsored ones."""
 
 SOURCES: dict[Dataset, Source] = {
     Dataset.BEA19_DEV: Source(
@@ -72,17 +85,41 @@ SOURCES: dict[Dataset, Source] = {
         format=Format.REFERENCES,
         licence="JFLEG, CC BY-NC-SA 4.0",
     ),
-    Dataset.BEA19_TRAIN: Source(
-        url="https://www.cl.cam.ac.uk/research/nl/bea2019st/data/wi+locness_v2.1.bea19.tar.gz",
-        members=("wi+locness/m2/ABC.train.gold.bea19.m2",),
+    Dataset.CWEB_G_DEV: Source(
+        url=CWEB_URL,
+        members=(
+            "CWEB-master/data/m2/CWEB-G.dev.m2",
+            "CWEB-master/data/raw/CWEB-G.dev.source",
+        ),
         format=Format.M2,
-        licence="W&I+LOCNESS v2.1, for research use (see the BEA-2019 shared task site)",
+        licence=CWEB_LICENCE,
     ),
-    Dataset.FCE_TRAIN: Source(
-        url="https://www.cl.cam.ac.uk/research/nl/bea2019st/data/fce_v2.1.bea19.tar.gz",
-        members=("fce/m2/fce.train.gold.bea19.m2",),
+    Dataset.CWEB_S_DEV: Source(
+        url=CWEB_URL,
+        members=(
+            "CWEB-master/data/m2/CWEB-S.dev.m2",
+            "CWEB-master/data/raw/CWEB-S.dev.source",
+        ),
         format=Format.M2,
-        licence="FCE v2.1, for research use (see the BEA-2019 shared task site)",
+        licence=CWEB_LICENCE,
+    ),
+    Dataset.CWEB_G_TEST: Source(
+        url=CWEB_URL,
+        members=(
+            "CWEB-master/data/m2/CWEB-G.test.m2",
+            "CWEB-master/data/raw/CWEB-G.test.source",
+        ),
+        format=Format.M2,
+        licence=CWEB_LICENCE,
+    ),
+    Dataset.CWEB_S_TEST: Source(
+        url=CWEB_URL,
+        members=(
+            "CWEB-master/data/m2/CWEB-S.test.m2",
+            "CWEB-master/data/raw/CWEB-S.test.source",
+        ),
+        format=Format.M2,
+        licence=CWEB_LICENCE,
     ),
 }
 

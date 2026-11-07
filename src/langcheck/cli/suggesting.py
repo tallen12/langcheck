@@ -113,8 +113,8 @@ def suggest_app(
     ) -> AsyncGenerator[CorrectionPipeline]:
         async with httpx.AsyncClient(transport=env.transport) as http:
             match trained:
-                case Proposing(trained=tagger, source=source):
-                    chosen = proposer_policy(policy)
+                case Proposing(trained=tagger, source=source, gate=gate):
+                    chosen = proposer_policy(policy, gate)
                     corrector: Corrector = ProposerCorrector(source, tagger.reader, chosen)
                     policy = chosen
                 case Trained() as tagger:

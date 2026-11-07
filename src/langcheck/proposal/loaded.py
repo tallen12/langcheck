@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from langcheck.correction.models import AbstainGate
+from langcheck.proposal.gate import load_gate
 from langcheck.proposal.protocols import Proposal, ProposalRequest, ProposalSource
 from langcheck.tagging.loaded import Trained, load_trained_with
 
@@ -28,10 +30,11 @@ class OneAtATimeSource:
 
 @dataclass(frozen=True, slots=True)
 class Proposing:
-    """A loaded tagger and a proposer reading with it."""
+    """A loaded tagger, a proposer reading with it and the proposer's gate, if it has one."""
 
     trained: Trained
     source: ProposalSource
+    gate: AbstainGate | None
 
 
 def load_proposing(tagger: Path, proposer: Path, *, device: str) -> Proposing:
@@ -52,4 +55,4 @@ def load_proposing(tagger: Path, proposer: Path, *, device: str) -> Proposing:
         max_length=loaded.info.max_length,
         width=BEAM_WIDTH,
     )
-    return Proposing(trained, OneAtATimeSource(source, lock))
+    return Proposing(trained, OneAtATimeSource(source, lock), load_gate(proposer))

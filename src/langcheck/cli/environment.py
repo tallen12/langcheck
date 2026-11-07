@@ -55,7 +55,8 @@ def process_environment() -> CliEnvironment:
     return CliEnvironment(
         environ=dict(os.environ),
         cwd=Path.cwd(),
-        out=print,
+        # Flushed so progress shows at once when output goes to a pipe or a log.
+        out=lambda line: print(line, flush=True),
         err=lambda line: print(line, file=sys.stderr),
         runner=UvicornRunner(),
         watcher=WatchfilesWatcher(),

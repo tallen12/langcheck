@@ -17,7 +17,7 @@ from typing import Final
 from langcheck.evaluation.detokenize import detokenize
 from langcheck.evaluation.m2 import AnnotatedSentence, GoldEdit, M2Error, corrected
 from langcheck.proposal.targets import UNCORRECTABLE
-from langcheck.tagging.alignment import preceding_text, split_words
+from langcheck.tagging.alignment import split_words
 
 MAX_WORDS: Final = 3
 """Longer edits are rewrites of one sentence, which would not fit another."""
@@ -284,57 +284,3 @@ def corrupt_in_context(
         confusions = rng.choice(tables)
         made.append((corrupt(words, confusions, rng), corrupt_context(context, confusions, rng)))
     return made
-
-
-def synthesize(
-    sentences: Sequence[AnnotatedSentence],
-    tables: Sequence[Confusions],
-    *,
-    copies: int,
-    seed: int = 0,
-) -> list[tuple[int, AnnotatedSentence]]:
-    """``copies`` corrupted versions of each known-clean sentence, each by one of
-    ``tables`` chosen at random and with the index of the sentence it came from, so a
-    caller can read it after that sentence's context.
-    """
-    rng = random.Random(seed)
-    made: list[tuple[int, AnnotatedSentence]] = []
-    for index, sentence in enumerate(sentences):
-        clean = known_clean(sentence)
-        if clean is not None:
-            made += [(index, corrupt(clean, rng.choice(tables), rng)) for _ in range(copies)]
-    return made
-
-
-def clean_versions(
-    sentences: Sequence[AnnotatedSentence], *, context_sentences: int
-) -> list[tuple[AnnotatedSentence, str] | None]:
-    """For each of ``sentences``, the sentence as its first annotator corrected it, with
-    nothing left to fix, and the corrected text before it; None where some of it stays
-    wrong. A sentence with nothing to fix is its own clean version.
-    """
-    fixes: list[Words | None] = [
-        known_clean(sentence) if sentence.annotators else sentence.tokens for sentence in sentences
-    ]
-    contexts = preceding_text(
-        [s.tokens if f is None else f for s, f in zip(sentences, fixes, strict=True)],
-        context_sentences,
-    )
-    return [
-        None if f is None else (AnnotatedSentence(f, ((),)), c)
-        for f, c in zip(fixes, contexts, strict=True)
-    ]
-
-
-def corrected_copies(
-    sentences: Sequence[AnnotatedSentence], *, context_sentences: int
-) -> list[tuple[AnnotatedSentence, str] | None]:
-    """For each of ``sentences``, its clean version (see :func:`clean_versions`), so the
-    tagger also sees the fixed version of each error it learns; None where the sentence
-    had nothing to fix or some of it stays wrong.
-    """
-    versions = clean_versions(sentences, context_sentences=context_sentences)
-    return [
-        version if sentence.annotators and sentence.annotators[0] else None
-        for sentence, version in zip(sentences, versions, strict=True)
-    ]

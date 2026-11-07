@@ -225,7 +225,7 @@ def test_a_proposing_checker_loads_both_and_needs_no_llm(tmp_path: Path) -> None
     def load(tagger: Path, proposer: Path, *, device: str) -> Proposing:
         seen.append((tagger, proposer, device))
         trained = Trained(WordTableTagger({"go": 0.9}), 0.5, "base", 0.5)
-        return Proposing(trained, OneProposal())
+        return Proposing(trained, OneProposal(), None)
 
     subject = asyncio.run(
         open_proposing_checker(Config(), tmp_path / "t", tmp_path / "p", load=load)

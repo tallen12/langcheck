@@ -6,8 +6,15 @@ import pytest
 from pydantic import ValidationError
 
 from langcheck.evaluation.datasets import Dataset, DatasetError
-from langcheck.evaluation.examples import Example, checked_text, load_corrected_pairs, load_examples
-from langcheck.evaluation.m2 import GoldEdit
+from langcheck.evaluation.examples import (
+    Example,
+    annotated_examples,
+    checked_text,
+    load_corrected_pairs,
+    load_examples,
+    written_text,
+)
+from langcheck.evaluation.m2 import GoldEdit, read_m2
 from langcheck.evaluation.models import ScoredEdit
 from tests.conftest import TokenDiffAnnotator
 
@@ -31,6 +38,14 @@ def test_loads_m2_sentences_with_their_annotators(tmp_path: Path) -> None:
         Example(("Fine", "."), ((),), "Fine ."),
     ]
     assert examples[0].tokenized
+
+
+def test_annotated_sentences_from_any_file_become_examples() -> None:
+    examples = annotated_examples(read_m2(M2)[:1], TokenDiffAnnotator())
+
+    assert examples == [
+        Example(("He", "go", "home", "."), ((ScoredEdit(1, 2, ("goes",), None),),), "He go home .")
+    ]
 
 
 class PunctuationTokens:
@@ -67,6 +82,28 @@ def test_checked_text_keeps_tokens_the_annotator_would_split_differently() -> No
         "A well-known fact ."
     )
     assert checked_text(("A", "fact", "."), PunctuationTokens()) == "A fact."
+
+
+def test_published_sentences_are_kept_and_checked_when_they_tokenize_back(
+    tmp_path: Path,
+) -> None:
+    hyphen = "S A build - up .\n\nS He go home .\n"
+    m2, raw = tmp_path / "set.m2", tmp_path / "set.source"
+    m2.write_text(hyphen, encoding="utf-8")
+    raw.write_text("A build-up.\nHe  go home.\n", encoding="utf-8")
+
+    first, second = load_examples(Dataset.CWEB_G_DEV, [m2, raw], PunctuationTokens())
+
+    assert (first.text, first.written) == ("A build-up.", "A build-up.")
+    assert written_text(("He", "go", "home", "."), "He went home.", PunctuationTokens()) == (
+        "He go home."
+    )
+    assert second.written == "He  go home."
+
+
+def test_published_sentences_must_cover_the_set() -> None:
+    with pytest.raises(DatasetError, match="written lines"):
+        annotated_examples(read_m2(M2), TokenDiffAnnotator(), written=["one"])
 
 
 def test_reference_sets_get_one_annotator_per_reference(tmp_path: Path) -> None:
@@ -115,6 +152,21 @@ def test_corrected_pairs_become_one_reference_each(tmp_path: Path) -> None:
     [[edit]] = first.annotators
     assert (edit.start, edit.end, edit.correction) == (1, 2, ("goes",))
     assert second.annotators == ((),)
+
+
+def test_alternatives_are_further_references(tmp_path: Path) -> None:
+    path = tmp_path / "pairs.jsonl"
+    path.write_text(
+        '{"text": "He go home", "corrected": "He goes home", "alternatives": ["He went home"]}\n',
+        encoding="utf-8",
+    )
+
+    [example] = load_corrected_pairs(path, TokenDiffAnnotator())
+
+    assert [[edit.correction for edit in edits] for edits in example.annotators] == [
+        [("goes",)],
+        [("went",)],
+    ]
 
 
 def test_a_line_without_a_correction_is_refused(tmp_path: Path) -> None:

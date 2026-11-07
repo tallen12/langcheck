@@ -12,12 +12,14 @@ from typing import TYPE_CHECKING, Annotated, Protocol, assert_never
 from cyclopts import App, Parameter
 
 from langcheck.cli.environment import CliEnvironment
-from langcheck.cli.tagging import read_pair_file
+from langcheck.cli.tagging import read_pair_file, read_training_pair_file
 from langcheck.correction.measure import CorrectionReport, Strategy
+from langcheck.correction.models import AbstainGate
 from langcheck.evaluation.datasets import Dataset, dataset_files
-from langcheck.evaluation.examples import Example, load_examples
+from langcheck.evaluation.examples import Example, annotated_examples
 from langcheck.evaluation.m2 import AnnotatedSentence, read_m2
 from langcheck.evaluation.protocols import EditAnnotator
+from langcheck.proposal.gate import save_gate
 from langcheck.proposal.measure import (
     RecallRow,
     build_cases,
@@ -30,15 +32,8 @@ from langcheck.proposal.measure import (
 )
 from langcheck.proposal.protocols import ProposalSource
 from langcheck.proposal.targets import training_targets
-from langcheck.synthesis.clean_text import clean_sentences, read_texts
-from langcheck.synthesis.corruption import (
-    clean_versions,
-    corrected_copies,
-    corrupt_in_context,
-    known_clean,
-    synthesize,
-    table_sets,
-)
+from langcheck.synthesis.clean_text import read_texts
+from langcheck.synthesis.training_mix import TrainingMix
 from langcheck.tagging.protocols import SentenceReader
 from langcheck.tagging.tiers import Adjacent, Falloff, Growth, TierPolicy
 
@@ -51,17 +46,15 @@ if TYPE_CHECKING:
 CLEAN = 0
 FAILED = 2
 DEFAULT_DATA = Path("data") / "eval"
-TRAINING_SETS = (Dataset.BEA19_TRAIN, Dataset.FCE_TRAIN)
 FALSE_ALARM_POLICY = TierPolicy(suggestion=0.1)
 """Low, to find false alarms: the tagger trained on these sentences and is sure of them."""
 USER_POLICY = TierPolicy()
-SCORED_SET = Dataset.BEA19_DEV
 SCORED_SENTENCES = 500
+"""Sentences of --score-with measured after each epoch."""
 SCORED_BATCH = 64
+"""Texts corrected together when scoring an epoch."""
 DEFAULT_LEARNING_RATE = 3e-4
 """As ``ProposerOptions`` has it, kept here so the command needs no PyTorch."""
-"""Texts corrected together when scoring an epoch."""
-"""The first 500 BEA-2019 dev sentences are what earlier proposers were compared on."""
 
 type Guard = Callable[[Callable[[], int]], int]
 
@@ -141,28 +134,22 @@ class ProposerRuntime(Protocol):
 
     def train(
         self,
-        sentences: Sequence[AnnotatedSentence],
         *,
         tagger: Path,
         output: Path,
         start: ProposerStart,
         epochs: int,
         learning_rate: float,
-        real: bool,
-        synthetic: int,
-        corrected: bool,
-        clean: Sequence[str],
-        pairs: Sequence[tuple[AnnotatedSentence, str]],
-        tables: Sequence[AnnotatedSentence],
-        errors: Sequence[int],
+        mix: TrainingMix,
         false_alarms: TierPolicy,
         scoring: EpochScoring | None,
         device: str,
         log: Callable[[str], None],
     ) -> None:
-        """Train a proposer on the ``tagger`` checkpoint and save it to ``output``, logging
-        each epoch's F0.5 on ``scoring`` when given. Training sentences are flagged under
-        ``false_alarms``, so the proposer learns to leave alone what it flags wrongly.
+        """Train a proposer on the ``tagger`` checkpoint and what ``mix`` names, and save
+        it to ``output``, logging each epoch's F0.5 on ``scoring`` when given. Training
+        sentences are flagged under ``false_alarms``, so the proposer learns to leave alone
+        what it flags wrongly.
         """
         ...
 
@@ -207,7 +194,8 @@ def _epoch_scorer(
     from langcheck.proposal.loaded import BEAM_WIDTH
     from langcheck.proposal.search import BeamProposer
 
-    policy = proposer_policy(CorrectionPolicy())
+    # A proposer in training has no gate yet; one is fitted for it afterwards.
+    policy = proposer_policy(CorrectionPolicy(), None)
     source = BeamProposer(
         loaded.tagger,
         proposer,
@@ -279,28 +267,22 @@ class TransformerProposerRuntime:
 
     def train(
         self,
-        sentences: Sequence[AnnotatedSentence],
         *,
         tagger: Path,
         output: Path,
         start: ProposerStart,
         epochs: int,
         learning_rate: float,
-        real: bool,
-        synthetic: int,
-        corrected: bool,
-        clean: Sequence[str],
-        pairs: Sequence[tuple[AnnotatedSentence, str]],
-        tables: Sequence[AnnotatedSentence],
-        errors: Sequence[int],
+        mix: TrainingMix,
         false_alarms: TierPolicy,
         scoring: EpochScoring | None,
         device: str,
         log: Callable[[str], None],
     ) -> None:
-        """Train a proposer on the ``tagger`` checkpoint and save it to ``output``, logging
-        each epoch's F0.5 on ``scoring`` when given. Training sentences are flagged under
-        ``false_alarms``, so the proposer learns to leave alone what it flags wrongly.
+        """Train a proposer on the ``tagger`` checkpoint and what ``mix`` names, and save
+        it to ``output``, logging each epoch's F0.5 on ``scoring`` when given. Training
+        sentences are flagged under ``false_alarms``, so the proposer learns to leave alone
+        what it flags wrongly.
         """
         import torch
 
@@ -319,16 +301,15 @@ class TransformerProposerRuntime:
             ProposerOptions,
             train_proposer,
         )
+        from langcheck.synthesis.training_mix import assemble
         from langcheck.tagging.checkpoint import load_checkpoint
         from langcheck.tagging.loaded import torch_limit
         from langcheck.tagging.tiers import slot_flags
-        from langcheck.tagging.training import split_holdout
 
         target = torch.device(device)
         torch_limit(target)
         loaded = load_checkpoint(tagger, device=target)
         reader = _tagger_reader(tagger, loaded, target)
-        contexts = contexts_of(sentences, loaded.info.context_sentences)
 
         def items_of(found: Sequence[AnnotatedSentence], read: Sequence[str]) -> list[ProposerItem]:
             log(f"flagging {len(found)} sentences")
@@ -344,43 +325,13 @@ class TransformerProposerRuntime:
                 for sentence, context, reading in zip(found, read, readings, strict=True)
             ]
 
-        pairs = list(zip(sentences, contexts, strict=True))
-        kept, held = split_holdout(pairs)
-        n_context = loaded.info.context_sentences
+        kept, held = assemble(mix, context_sentences=loaded.info.context_sentences)
 
-        def flagged(found: Sequence[tuple[AnnotatedSentence, str] | None]) -> list[ProposerItem]:
-            known = [pair for pair in found if pair is not None]
-            return items_of([s for s, _ in known], [c for _, c in known])
+        def flagged(found: Sequence[tuple[AnnotatedSentence, str]]) -> list[ProposerItem]:
+            return items_of([s for s, _ in found], [c for _, c in found])
 
-        training = flagged(kept) if real else []
+        training = flagged(kept)
         validation = flagged(held)
-        if corrected and real:
-            fixed, _ = split_holdout(corrected_copies(sentences, context_sentences=n_context))
-            training += flagged(fixed)
-        corruption = table_sets([[s for s, _ in kept], tables], error_counts=errors)
-        if synthetic:
-            made = synthesize([s for s, _ in kept], corruption, copies=synthetic)
-            training += items_of([s for _, s in made], [kept[i][1] for i, _ in made])
-            if corrected and not real:
-                versions, _ = split_holdout(clean_versions(sentences, context_sentences=n_context))
-                training += flagged([versions[i] for i in sorted({i for i, _ in made})])
-        if clean:
-            found = list(clean_sentences(clean, context_sentences=n_context))
-            training += flagged(
-                corrupt_in_context([(c.words, c.context) for c in found], corruption)
-            )
-            if corrected:
-                training += flagged([(AnnotatedSentence(c.words, ((),)), c.context) for c in found])
-        if pairs:
-            training += flagged(pairs)
-            if corrected:
-                training += flagged(
-                    [
-                        (AnnotatedSentence(fixed, ((),)), context)
-                        for sentence, context in pairs
-                        if (fixed := known_clean(sentence)) is not None
-                    ]
-                )
         cases = sum(len(item.targets) for item in training)
         log(f"{len(training)} training sentences, {cases} targets")
         shape = shape_for(loaded.tagger)
@@ -483,7 +434,7 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
         return data if data is not None else env.cwd / DEFAULT_DATA
 
     def read_set(dataset: Dataset, data: Path | None) -> list[AnnotatedSentence] | None:
-        [path] = dataset_files(dataset, data_dir(data))
+        path = dataset_files(dataset, data_dir(data))[0]
         if not path.is_file():
             env.err(f"langcheck: run `langcheck evaluate fetch {dataset.value}` first")
             return None
@@ -501,13 +452,6 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
             Parameter(help="Continue a saved proposer, such as one trained on synthetic errors."),
         ] = None,
         learning_rate: float = DEFAULT_LEARNING_RATE,
-        real: Annotated[
-            bool,
-            Parameter(
-                help="Train on the real learner sentences; --no-real trains on --synthetic "
-                "and --clean ones alone, still validated on real ones."
-            ),
-        ] = True,
         corrected: Annotated[
             bool,
             Parameter(
@@ -515,11 +459,9 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
                 "sentence, where the tagger's false alarms should be left alone."
             ),
         ] = False,
-        synthetic: Annotated[
-            int, Parameter(help="Corrupted copies of each corrected training sentence to add.")
-        ] = 0,
         clean: Annotated[
-            Path | None, Parameter(help="JSONL of edited prose to corrupt and add, one per text.")
+            Path | None,
+            Parameter(help="JSONL of edited prose to corrupt with the error tables, one per text."),
         ] = None,
         pairs: Annotated[
             list[Path] | None,
@@ -532,22 +474,27 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
             list[Path] | None,
             Parameter(
                 help="Pairs (M2 or JSONL) to learn a second set of error tables from; each "
-                "--synthetic or --clean sentence takes the learner set or this one at random. "
-                "Repeatable."
+                "--clean sentence takes the built-in tables or these at random. Repeatable."
             ),
         ] = None,
         errors: Annotated[
             list[int] | None,
             Parameter(
-                help="Error counts to draw each --synthetic or --clean sentence's from, such "
-                "as 0 1 2 3 for a quarter each; default as the tables' source shows.",
+                help="Error counts to draw each --clean sentence's from, such as 0 1 2 3 for "
+                "a quarter each; default 0 1 2 3 for the built-in tables, as the pairs show "
+                "for --tables.",
                 consume_multiple=True,
             ),
         ] = None,
-        limit: Annotated[int | None, Parameter(help="Only the first N sentences.")] = None,
+        score_with: Annotated[
+            Path | None,
+            Parameter(
+                help="Pairs (M2 or JSONL), not an evaluation set, to measure F0.5 on after "
+                "each epoch and choose the epoch by; leave out to keep the lowest loss."
+            ),
+        ] = None,
         scored: Annotated[
-            int,
-            Parameter(help="BEA-2019 dev sentences to measure F0.5 on after each epoch; 0 skips."),
+            int, Parameter(help="Sentences of --score-with to measure.")
         ] = SCORED_SENTENCES,
         suggestion: Annotated[
             tuple[float, ...],
@@ -578,44 +525,29 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
             ),
         ] = None,
         device: str = "cuda",
-        data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
     ) -> int:
-        """Train on the BEA-2019 W&I+LOCNESS and FCE training sets; save to OUTPUT. Flags
-        for training and scoring both grow as --join and --rate say.
+        """Train on --clean prose, corrupted with error tables, and on --pairs; save to
+        OUTPUT. Evaluation sets are never trained on. Flags for training and scoring both
+        grow as --join and --rate say.
         """
         growth: Growth = Adjacent() if join is None else Falloff(join=join, rate=rate)
 
         def run() -> int:
-            if not real and not synthetic and clean is None and pairs is None:
-                env.err(
-                    "langcheck: without the real sentences, train on --synthetic, --clean "
-                    "or --pairs"
-                )
+            if clean is None and pairs is None:
+                env.err("langcheck: train on --clean prose or --pairs")
                 return FAILED
             if any(count < 0 for count in errors or ()):
                 env.err("langcheck: --errors takes counts of 0 or more")
                 return FAILED
-            sentences: list[AnnotatedSentence] = []
-            for dataset in TRAINING_SETS:
-                found = read_set(dataset, data)
-                if found is None:
-                    return FAILED
-                sentences += found
             scoring: EpochScoring | None = None
-            if scored > 0:
-                files = dataset_files(SCORED_SET, data_dir(data))
-                if not all(path.is_file() for path in files):
-                    env.err(f"langcheck: run `langcheck evaluate fetch {SCORED_SET.value}` first")
-                    return FAILED
+            if score_with is not None:
                 annotator = env.edit_annotators()
-                gold = read_set(SCORED_SET, data)
-                if gold is None:
-                    return FAILED
+                gold = [sentence for sentence, _ in read_pair_file(score_with)][:scored]
                 scoring = EpochScoring(
-                    SCORED_SET.value,
-                    tuple(load_examples(SCORED_SET, files, annotator, limit=scored)),
+                    score_with.stem,
+                    tuple(annotated_examples(gold, annotator)),
                     annotator,
-                    tuple(gold[:scored]),
+                    tuple(gold),
                     tuple(
                         TierPolicy(error=max(USER_POLICY.error, at), suggestion=at, growth=growth)
                         for at in suggestion
@@ -624,22 +556,25 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
                     tuple((path.stem, tuple(read_pair_file(path))) for path in score_on or ()),
                 )
             elif score_on is not None:
-                env.err("langcheck: --score-on needs --scored above 0")
+                env.err("langcheck: --score-on needs --score-with")
                 return FAILED
             runtime.train(
-                sentences[:limit],
                 tagger=tagger,
                 output=output,
                 start=Fresh() if start_from is None else FromProposer(start_from),
                 epochs=epochs,
                 learning_rate=learning_rate,
-                real=real,
-                synthetic=synthetic,
-                corrected=corrected,
-                clean=read_texts(clean) if clean is not None else (),
-                pairs=[pair for path in pairs or () for pair in read_pair_file(path)],
-                tables=[s for path in tables or () for s, _ in read_pair_file(path)],
-                errors=errors or (),
+                mix=TrainingMix(
+                    corrected=corrected,
+                    clean=tuple(read_texts(clean)) if clean is not None else (),
+                    pairs=tuple(
+                        pair for path in pairs or () for pair in read_training_pair_file(path)
+                    ),
+                    tables=tuple(
+                        s for path in tables or () for s, _ in read_training_pair_file(path)
+                    ),
+                    errors=tuple(errors or ()),
+                ),
                 false_alarms=TierPolicy(
                     error=max(USER_POLICY.error, false_alarms),
                     suggestion=false_alarms,
@@ -654,13 +589,49 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
 
         return guarded(run)
 
+    @app.command(name="gate")
+    def gate_command(
+        proposer: Path,
+        /,
+        *,
+        belief: Annotated[float, Parameter(help="Weight of the proposer's own belief.")],
+        reduction: Annotated[float, Parameter(help="Weight of the drop in the tagger's score.")],
+        flag_score: Annotated[float, Parameter(help="Weight of the flag's score.")],
+        bias: float,
+        hide: Annotated[float, Parameter(help="Log odds below which nothing is offered.")] = -0.5,
+        confident: Annotated[
+            float, Parameter(help="Log odds from which a correction is offered with confidence.")
+        ] = 0.0,
+    ) -> int:
+        """Save an abstain gate fitted for the proposer at PROPOSER beside it."""
+
+        def run() -> int:
+            if not proposer.is_dir():
+                env.err(f"langcheck: no proposer at {proposer}")
+                return FAILED
+            gate = AbstainGate(
+                belief=belief,
+                reduction=reduction,
+                flag_score=flag_score,
+                bias=bias,
+                hide=hide,
+                confident=confident,
+            )
+            env.out(f"saved: {save_gate(proposer, gate)}")
+            return CLEAN
+
+        return guarded(run)
+
     @app.command(name="measure")
     def measure_command(
         proposer: Path,
         /,
         *,
         tagger: Annotated[Path, Parameter(help="The tagger checkpoint it was trained on.")],
-        tune_on: Annotated[Dataset, Parameter(help="Half tunes, half tests.")] = Dataset.BEA19_DEV,
+        tune_on: Annotated[
+            Path,
+            Parameter(help="Pairs (M2 or JSONL), not an evaluation set: half tunes, half tests."),
+        ],
         test_on: Annotated[Dataset, Parameter(help="Tested with those weights.")] = (
             Dataset.CONLL14_TEST
         ),
@@ -676,10 +647,14 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
             source, reader, context = runtime.load(tagger, proposer, device=device, width=width)
             saved: dict[str, list[dict[str, object]]] = {}
             weight, penalty = 0.0, 0.0
-            for dataset in (tune_on, test_on):
-                found = read_set(dataset, data)
-                if found is None:
-                    return FAILED
+            tested = read_set(test_on, data)
+            if tested is None:
+                return FAILED
+            sets = (
+                (tune_on.stem, [s for s, _ in read_training_pair_file(tune_on)], True),
+                (test_on.value, tested, False),
+            )
+            for set_name, found, tunes in sets:
                 sentences = found[:limit]
                 contexts = contexts_of(sentences, context)
                 readings = reader.read([s.tokens for s in sentences], contexts=contexts)
@@ -691,32 +666,32 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
                         sentences, spans, readings, contexts, source, reader, log=env.out
                     )
                     held = cases
-                    if dataset is tune_on and name == "flags":
+                    if tunes and name == "flags":
                         half = len(sentences) // 2
                         weight, penalty = tune([c for c in cases if c.sentence < half])
                         env.out(f"tuned: weight {weight} penalty {penalty}")
-                    if dataset is tune_on:
+                    if tunes:
                         half = len(sentences) // 2
                         held = [c for c in cases if c.sentence >= half]
                     alarms = [c for c in cases if c.false_alarm]
                     rows = [
-                        recall_row(f"{dataset.value} {name} proposer", held),
+                        recall_row(f"{set_name} {name} proposer", held),
                         recall_row(
-                            f"{dataset.value} {name} re-ranked",
+                            f"{set_name} {name} re-ranked",
                             held,
                             weight=weight,
                             penalty=penalty,
                         ),
-                        recall_row(f"{dataset.value} {name} tagger only", held, weight=1e3),
+                        recall_row(f"{set_name} {name} tagger only", held, weight=1e3),
                     ]
                     env.out(render_rows(rows))
                     env.out(
-                        f"{dataset.value} {name}: {len(alarms)} false alarms, "
+                        f"{set_name} {name}: {len(alarms)} false alarms, "
                         f"{sum(c.keep_first for c in alarms)} keep first; "
                         f"{sum(c.keep_first for c in cases if not c.false_alarm)} of "
                         f"{sum(not c.false_alarm for c in cases)} real errors keep first"
                     )
-                    saved[f"{dataset.value} {name}"] = [row.model_dump() for row in rows]
+                    saved[f"{set_name} {name}"] = [row.model_dump() for row in rows]
             if output is not None:
                 output.write_text(json.dumps(saved, indent=2), encoding="utf-8")
             return CLEAN

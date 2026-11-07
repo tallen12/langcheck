@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import Sequence
 
 from langcheck.correction.models import (
+    AbstainGate,
     CandidateOrder,
     Corrected,
     CorrectionPolicy,
@@ -11,6 +12,7 @@ from langcheck.correction.models import (
 from langcheck.correction.pipeline import CorrectionPipeline
 from langcheck.proposal.corrector import ProposerCorrector, proposer_policy, word_span
 from langcheck.proposal.protocols import Proposal, ProposalRequest
+from langcheck.proposal.rerank import Scored
 from langcheck.proposal.targets import WordSpan
 from langcheck.tagging.alignment import CharSpan
 from langcheck.tagging.document import SentenceInText
@@ -89,6 +91,26 @@ def test_the_tagger_reorders_and_a_keep_is_dropped() -> None:
     assert set(reader.contexts) == {"Before."}
 
 
+class Observer:
+    def __init__(self) -> None:
+        self.seen: list[tuple[TextFlag, list[str], list[str]]] = []
+
+    def reranked(
+        self, flag: TextFlag, proposals: Sequence[Scored], ordered: Sequence[Scored]
+    ) -> None:
+        self.seen.append((flag, [p.text for p in proposals], [p.text for p in ordered]))
+
+
+def test_an_observer_sees_each_flags_proposals_before_and_after_reranking() -> None:
+    source = Source(Proposal("", -0.1, keep=True), Proposal("go", -0.5), Proposal("goes", -2.0))
+    observer = Observer()
+    item = flagged(13, 15)
+
+    asyncio.run(ProposerCorrector(source, Reader(), POLICY, observer=observer).correct([item]))
+
+    assert observer.seen == [(item.flags[0], ["go", "goes"], ["goes", "go"])]
+
+
 def test_no_sentences_read_nothing() -> None:
     reader = Reader()
 
@@ -140,9 +162,15 @@ def test_candidates_carry_the_belief_of_their_proposal() -> None:
     assert pending.candidates[0].belief == -1.5
 
 
-def test_a_proposer_policy_keeps_its_order_and_gates() -> None:
-    policy = proposer_policy(CorrectionPolicy(count=3))
+def test_a_proposer_policy_keeps_its_order_and_takes_the_proposers_gate() -> None:
+    gate = AbstainGate(
+        belief=1.0, reduction=0.0, flag_score=0.0, bias=0.0, hide=-1.0, confident=0.0
+    )
+
+    policy = proposer_policy(CorrectionPolicy(count=3), gate)
+    ungated = proposer_policy(CorrectionPolicy(), None)
 
     assert policy.count == 3
     assert policy.order is CandidateOrder.AS_WRITTEN
-    assert policy.gate is not None
+    assert policy.gate == gate
+    assert ungated.gate is None

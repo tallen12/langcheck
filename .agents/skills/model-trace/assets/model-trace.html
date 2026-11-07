@@ -1,0 +1,287 @@
+<title>__TITLE__</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a lab-notebook trace. Summary and stage funnel up top, filters, then one entry per sentence, read top to bottom: sentence, gold, tagger, proposer, output. */
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --fg: #1d2330; --muted: #5d6677; --line: #dde1e8;
+  --accent: #2f5bd3; --accent-soft: #e6ecfb;
+  --ok: #1d7a4a; --ok-soft: #e1f2e8; --bad: #b4322b; --bad-soft: #f8e3e1;
+  --warn: #9a6200; --warn-soft: #fbf0d9; --neutral-soft: #eceef2;
+  --flag: rgba(214, 140, 0, A);
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --sans: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #13161d; --panel: #1b1f28; --fg: #e3e7ef; --muted: #98a1b3; --line: #2c3240;
+  --accent: #86a6ff; --accent-soft: #233056;
+  --ok: #6fd19a; --ok-soft: #173826; --bad: #f08a80; --bad-soft: #43201d;
+  --warn: #f0c060; --warn-soft: #3d2f12; --neutral-soft: #262b36; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #13161d; --panel: #1b1f28; --fg: #e3e7ef; --muted: #98a1b3; --line: #2c3240;
+  --accent: #86a6ff; --accent-soft: #233056;
+  --ok: #6fd19a; --ok-soft: #173826; --bad: #f08a80; --bad-soft: #43201d;
+  --warn: #f0c060; --warn-soft: #3d2f12; --neutral-soft: #262b36; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 14px; line-height: 1.5; }
+.wrap { max-width: 1100px; margin: 0 auto; padding-block: 28px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 24px; }
+h1 { font-family: var(--serif); font-weight: 600; font-size: 30px; margin: 0; text-wrap: balance; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+p { margin: 0; max-width: 72ch; }
+.lede { color: var(--muted); display: grid; gap: 6px; }
+.mono, code { font-family: var(--mono); font-size: 12.5px; }
+.num { font-variant-numeric: tabular-nums; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; min-width: 0; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: 12px; }
+td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
+.funnel { display: grid; gap: 8px; }
+.bar { display: grid; grid-template-columns: 210px 1fr 64px; gap: 10px; align-items: center; }
+.bar .track { background: var(--neutral-soft); border-radius: 3px; height: 14px; overflow: hidden; }
+.bar .fill { height: 100%; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; position: sticky; top: env(safe-area-inset-top, 0px); background: var(--bg); padding-block: 10px; z-index: 5; border-bottom: 1px solid var(--line); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.controls button, .controls input { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+.controls input { border-radius: 6px; cursor: text; min-width: 0; flex: 1 1 180px; }
+.controls button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--panel); }
+button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.count { color: var(--muted); }
+.entry { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.entry header { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.entry .idx { font-family: var(--mono); color: var(--muted); font-size: 12px; }
+.sentence { font-family: var(--serif); font-size: 17px; line-height: 1.65; overflow-wrap: anywhere; }
+.sentence mark { background: var(--flag); color: inherit; border-radius: 2px; padding: 0 1px; }
+.sentence mark.gap { padding: 0 3px; border-left: 2px solid var(--warn); background: none; }
+.sentence sup { font-family: var(--mono); font-size: 10px; color: var(--warn); }
+.row { display: grid; grid-template-columns: 120px 1fr; gap: 12px; min-width: 0; }
+.row > .label { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding-top: 2px; }
+.row > div { min-width: 0; display: grid; gap: 6px; }
+.chip { display: inline-block; font-size: 11.5px; font-weight: 600; border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+.c-valid, .c-offered, .c-tp { background: var(--ok-soft); color: var(--ok); }
+.c-wrong, .c-fp, .c-not_flagged { background: var(--bad-soft); color: var(--bad); }
+.c-neutral, .c-plain { background: var(--neutral-soft); color: var(--muted); }
+.c-disputed, .c-filtered, .c-not_proposed, .c-fn, .c-beam_not_top8 { background: var(--warn-soft); color: var(--warn); }
+.c-linked { background: var(--accent-soft); color: var(--accent); }
+.edit { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+del { color: var(--bad); text-decoration-thickness: 1.5px; }
+ins { color: var(--ok); text-decoration: none; font-weight: 600; }
+.ref { font-family: var(--serif); font-size: 15px; overflow-wrap: anywhere; }
+.ref.scored { border-left: 3px solid var(--accent); padding-left: 8px; }
+.flag { border: 1px solid var(--line); border-radius: 6px; padding: 10px; display: grid; gap: 8px; min-width: 0; }
+.flag h3 { margin: 0; font-size: 13.5px; font-weight: 600; display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.scroll { overflow-x: auto; }
+.beam td, .beam th { font-family: var(--mono); font-size: 12px; padding: 2px 8px; white-space: nowrap; }
+.beam tr.top8 td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.beam tr.dim td { color: var(--muted); }
+.meter { display: inline-block; width: 60px; height: 6px; background: var(--neutral-soft); border-radius: 3px; vertical-align: middle; margin-left: 6px; overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--warn); }
+details > summary { cursor: pointer; color: var(--accent); font-size: 12.5px; }
+.empty { color: var(--muted); font-style: italic; }
+.more { justify-self: center; font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 6px; padding: 8px 16px; cursor: pointer; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 12.5px; }
+@media (max-width: 640px) {
+  .row { grid-template-columns: 1fr; gap: 4px; }
+  .bar { grid-template-columns: 1fr 48px; }
+  .bar .track { grid-column: 1 / -1; grid-row: 2; }
+}
+</style>
+
+<div class="wrap">
+  <header class="lede">
+    <h1 id="heading">__TITLE__</h1>
+    <p id="intro"></p>
+  </header>
+
+  <section class="grid2">
+    <div class="panel">
+      <h2>Score against the clean set</h2>
+      <table id="score"></table>
+    </div>
+    <div class="panel">
+      <h2>Where each fix was lost (main reference)</h2>
+      <div class="funnel" id="funnel"></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Why 83 fixes but 76 in the score</h2>
+    <p id="why"></p>
+  </section>
+
+  <div class="controls" role="toolbar" aria-label="Filter sentences">
+    <button type="button" data-filter="all" aria-pressed="true">All</button>
+    <button type="button" data-filter="gold">Needs a fix</button>
+    <button type="button" data-filter="flagged">Flagged</button>
+    <button type="button" data-filter="offered">Model edited</button>
+    <button type="button" data-filter="fp">False alarm</button>
+    <button type="button" data-filter="not_flagged">Missed: not flagged</button>
+    <button type="button" data-filter="not_proposed">Missed: not proposed</button>
+    <button type="button" data-filter="filtered">Missed: filtered out</button>
+    <input id="q" type="search" placeholder="Search text" aria-label="Search sentences">
+    <span class="count" id="count"></span>
+  </div>
+
+  <div class="legend">
+    <span><span class="chip c-tp">matched</span> <span class="chip c-fp">false alarm</span> <span class="chip c-fn">missed</span> in the model's score</span>
+    <span>Beam rows with a blue edge are the top 8 after reranking, which reach the filters.</span>
+  </div>
+
+  <main id="list" style="display:grid; gap:14px"></main>
+  <button type="button" class="more" id="more" hidden>Show more</button>
+</div>
+
+<script id="data" type="application/json">/*DATA*/</script>
+<script>
+const DATA = JSON.parse(document.getElementById('data').textContent);
+const S = DATA.sentences;
+const sum = DATA.summary;
+document.getElementById('intro').textContent =
+  `Every stage of the ${sum.tagger} tagger and ${sum.proposer} proposer on the ${S.length} sentences of the judged ${sum.dataset} clean set, with the settings of the scored run: tagger flags from score 0.1, the proposer's beam, reranked, the top 8 through the filters and the gate, and the first survivor offered.`;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const STAGE = {
+  offered: 'Right fix offered',
+  filtered: 'Proposed, filtered out',
+  beam_not_top8: 'In beam, below top 8',
+  not_proposed: 'Flagged, never proposed',
+  not_flagged: 'Not flagged',
+};
+const STAGE_COLOR = { offered: 'var(--ok)', filtered: 'var(--warn)', beam_not_top8: 'var(--warn)', not_proposed: 'var(--warn)', not_flagged: 'var(--bad)' };
+
+// Summary
+const p = sum.tp / (sum.tp + sum.fp), r = sum.tp / (sum.tp + sum.fn);
+const f = 1.25 * p * r / (0.25 * p + r);
+document.getElementById('score').innerHTML = `
+  <tr><th>Precision</th><td class="r">${p.toFixed(3)}</td><td class="count">${sum.tp} matched of ${sum.tp + sum.fp} edits made</td></tr>
+  <tr><th>Recall</th><td class="r">${r.toFixed(3)}</td><td class="count">${sum.tp} matched of ${sum.tp + sum.fn} reference edits</td></tr>
+  <tr><th>F0.5</th><td class="r">${f.toFixed(3)}</td><td></td></tr>
+  <tr><th>Sentences</th><td class="r">${S.length}</td><td class="count">${S.filter(s => s.references[0] !== s.text).length} need a fix, ${S.filter(s => s.references[0] === s.text).length} need none</td></tr>
+  <tr><th>Flags</th><td class="r">${S.reduce((n, s) => n + s.flags.length, 0)}</td><td class="count">in ${S.filter(s => s.flags.length).length} sentences</td></tr>`;
+const total = Object.values(sum.stages).reduce((a, b) => a + b, 0);
+document.getElementById('funnel').innerHTML = Object.keys(STAGE).filter(k => sum.stages[k]).map(k => `
+  <div class="bar"><span>${STAGE[k]}</span><span class="track"><span class="fill" style="display:block;width:${100 * sum.stages[k] / total}%;background:${STAGE_COLOR[k]}"></span></span><span class="num" style="text-align:right">${sum.stages[k]} · ${Math.round(100 * sum.stages[k] / total)}%</span></div>`).join('')
+  + `<p class="count">${total} edits in the main references (the correction the judges prefer, or the one with most valid edits).</p>`;
+const alt = S.filter(s => s.scored_against > 0).length;
+document.getElementById('why').textContent =
+  `The main references hold ${sum.main_reference_edits} edits. The score counts ${sum.scored_reference_edits}, because when a sentence has more than one valid correction, ERRANT scores the model against whichever one gives it the best result. ${S.filter(s => s.references.length > 1).length} sentences have an alternative, and in ${alt} of them the model was scored against the alternative, which had fewer edits than the main one. Entries scored against an alternative say so, and the reference used is marked with a blue edge.`;
+
+// Sentence entries
+function words(s) { return s.match(/\s+|[^\s]+/g) || []; }
+function diff(a, b) {
+  const x = words(a), y = words(b), n = x.length, m = y.length;
+  const L = Array.from({length: n + 1}, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+    L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  let i = 0, j = 0, out = '';
+  while (i < n || j < m) {
+    if (i < n && j < m && x[i] === y[j]) { out += esc(x[i]); i++; j++; }
+    else if (j < m && (i === n || L[i][j + 1] >= L[i + 1][j])) { out += `<ins>${esc(y[j])}</ins>`; j++; }
+    else { out += `<del>${esc(x[i])}</del>`; i++; }
+  }
+  return out;
+}
+function marked(s) {
+  const flags = [...s.flags].map((f, k) => ({...f, k})).sort((a, b) => a.start - b.start);
+  let out = '', pos = 0;
+  for (const f of flags) {
+    if (f.start < pos) continue;
+    out += esc(s.text.slice(pos, f.start));
+    const alpha = (0.15 + 0.6 * Math.min(1, f.score)).toFixed(2);
+    const style = `style="--flag: rgba(214,140,0,${alpha})"`;
+    out += f.end > f.start
+      ? `<mark ${style} title="score ${f.score}">${esc(s.text.slice(f.start, f.end))}</mark><sup>${f.k + 1}</sup>`
+      : `<mark class="gap" title="missing word? score ${f.score}"></mark><sup>${f.k + 1}</sup>`;
+    pos = f.end;
+  }
+  return out + esc(s.text.slice(pos));
+}
+function editHtml(e) {
+  const o = e.original ? `<del>${esc(e.original)}</del>` : '<span class="count">∅</span>';
+  const c = e.correction ? `<ins>${esc(e.correction)}</ins>` : '<span class="count">∅</span>';
+  return `${o} → ${c}`;
+}
+function goldHtml(s) {
+  if (!s.gold.length) return '<span class="empty">No annotator changed this sentence.</span>';
+  const pref = s.preference ? `<div class="count">Judges prefer: ${esc(s.preference)}</div>` : '';
+  return s.gold.map(v => `<div><div class="count">${esc(v.label)}</div>${v.edits.map(e => `
+    <div class="edit">${editHtml(e)} <span class="chip c-${e.verdict}">${e.verdict}${e.votes ? ' ' + e.votes + '/3' : ''}</span>${e.linked ? ' <span class="chip c-linked">linked</span>' : ''}</div>`).join('')}</div>`).join('') + pref;
+}
+function refsHtml(s) {
+  if (s.references[0] === s.text && s.references.length === 1) return '<span class="empty">Needs no change.</span>';
+  return s.references.map((ref, k) => {
+    const edits = (s.reference_edits[k] || []).map(e => `<div class="edit">${editHtml(e)} <span class="chip c-${e.stage}">${STAGE[e.stage]}</span>${e.why.length && e.stage === 'filtered' ? ' <span class="count">by ' + esc([...new Set(e.why)].join(', ')) + '</span>' : ''}</div>`).join('');
+    return `<div class="ref${k === s.scored_against ? ' scored' : ''}"><div class="count" style="font-family:var(--sans);font-size:12px">${k === 0 ? 'Main reference' : 'Alternative ' + k}${k === s.scored_against && s.references.length > 1 ? ' · scored against this one' : ''}</div>${diff(s.text, ref)}</div>${edits}`;
+  }).join('');
+}
+function flagHtml(f, k) {
+  // Filter results carry their rank after reranking; ones refused before placement keep
+  // the beam's exact text instead, since they never became a placed candidate.
+  const byRank = {};
+  const rankOf = o => o.rank ?? (f.beam.find(b => b.text === o.text && b.rerank <= 8) || {}).rerank;
+  (f.offered || []).forEach((o, i) => byRank[rankOf(o)] = {chip: `<span class="chip c-offered">${i === 0 ? 'offered first' : 'offered'}</span>`, red: o.reduction});
+  (f.rejected || []).forEach(o => { const k = rankOf(o); if (!byRank[k]) byRank[k] = {chip: `<span class="chip c-plain">${esc(o.reason)}</span>`, red: o.reduction}; });
+  const rows = f.beam.map((b, i) => ({...b, beam: i + 1})).sort((a, b) => a.rerank - b.rerank);
+  const body = r => { const got = byRank[r.rerank] || {}; return `<tr class="${r.rerank <= 8 ? 'top8' : 'dim'}"><td class="r">${r.rerank}</td><td class="r">${r.beam}</td><td>${esc(r.text) || '<span class="count">(delete)</span>'}</td><td class="r">${r.logp.toFixed(2)}</td><td class="r">${r.drop.toFixed(2)}</td><td class="r">${r.rerank_score.toFixed(2)}</td><td class="r">${got.red != null ? got.red.toFixed(2) : ''}</td><td>${got.chip || ''}</td></tr>`; };
+  const head = `<tr><th class="r">Rerank</th><th class="r">Beam</th><th>Proposal</th><th class="r">log p</th><th class="r">Tagger drop</th><th class="r">Rerank score</th><th class="r">Score cut</th><th>Filters</th></tr>`;
+  const top = rows.filter(r => r.rerank <= 8), rest = rows.filter(r => r.rerank > 8);
+  const offered = (f.offered || [])[0];
+  const result = offered
+    ? `<span class="chip c-offered">offered</span> <span class="edit">${editHtml({original: f.text, correction: offered.text})}</span> <span class="count">${esc(offered.confidence)} confidence</span>`
+    : '<span class="chip c-plain">nothing offered</span>';
+  return `<div class="flag"><h3><span class="mono">#${k + 1}</span> <span class="edit">${f.text ? esc(f.text) : '(gap)'}</span>
+    <span class="count">score ${f.score.toFixed(3)}<span class="meter"><i style="width:${Math.min(100, f.score * 100)}%"></i></span></span>
+    <span class="chip c-plain">${esc(f.tier)}</span><span class="chip c-plain">${esc(f.kind)}</span></h3>
+    <div>${result}</div>
+    <div class="scroll"><table class="beam">${head}${top.map(body).join('')}</table></div>
+    ${rest.length ? `<details><summary>${rest.length} more beam proposals, below the top 8</summary><div class="scroll"><table class="beam">${head}${rest.map(body).join('')}</table></div></details>` : ''}
+  </div>`;
+}
+function entryHtml(s, i) {
+  const stages = new Set((s.reference_edits[0] || []).map(e => e.stage));
+  const chips = [s.tp && `<span class="chip c-tp">${s.tp} matched</span>`, s.fp && `<span class="chip c-fp">${s.fp} false alarm${s.fp > 1 ? 's' : ''}</span>`, s.fn && `<span class="chip c-fn">${s.fn} missed</span>`].filter(Boolean).join(' ');
+  const output = s.output === s.text ? '<span class="empty">Unchanged.</span>' : `<div class="ref">${diff(s.text, s.output)}</div>`;
+  return `<article class="entry">
+    <header><span class="idx">#${i + 1}</span>${chips}${s.scored_against > 0 ? '<span class="chip c-linked">scored against alternative</span>' : ''}</header>
+    <div class="sentence">${marked(s)}</div>
+    <div class="row"><div class="label">Gold edits</div><div>${goldHtml(s)}</div></div>
+    <div class="row"><div class="label">Clean reference</div><div>${refsHtml(s)}</div></div>
+    <div class="row"><div class="label">Tagger + proposer</div><div>${s.flags.length ? s.flags.map(flagHtml).join('') : '<span class="empty">No flags.</span>'}</div></div>
+    <div class="row"><div class="label">Model output</div><div>${output}</div></div>
+  </article>`;
+}
+
+const tests = {
+  all: () => true,
+  gold: s => s.references[0] !== s.text,
+  flagged: s => s.flags.length > 0,
+  offered: s => s.output !== s.text,
+  fp: s => s.fp > 0,
+  not_flagged: s => (s.reference_edits[0] || []).some(e => e.stage === 'not_flagged'),
+  not_proposed: s => (s.reference_edits[0] || []).some(e => e.stage === 'not_proposed' || e.stage === 'beam_not_top8'),
+  filtered: s => (s.reference_edits[0] || []).some(e => e.stage === 'filtered'),
+};
+let filter = 'all', shown = 0, matches = [];
+const PAGE = 40;
+const list = document.getElementById('list'), more = document.getElementById('more');
+function render(reset) {
+  if (reset) {
+    const q = document.getElementById('q').value.trim().toLowerCase();
+    matches = S.map((s, i) => [s, i]).filter(([s]) => tests[filter](s) && (!q || s.text.toLowerCase().includes(q)));
+    list.innerHTML = ''; shown = 0;
+    document.getElementById('count').textContent = `${matches.length} of ${S.length}`;
+  }
+  const next = matches.slice(shown, shown + PAGE);
+  list.insertAdjacentHTML('beforeend', next.map(([s, i]) => entryHtml(s, i)).join('') || (shown ? '' : '<p class="empty">No sentences match.</p>'));
+  shown += next.length;
+  more.hidden = shown >= matches.length;
+  more.textContent = `Show ${Math.min(PAGE, matches.length - shown)} more`;
+}
+document.querySelectorAll('[data-filter]').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('[data-filter]').forEach(x => x.setAttribute('aria-pressed', x === b));
+  filter = b.dataset.filter; render(true);
+}));
+document.getElementById('q').addEventListener('input', () => render(true));
+more.addEventListener('click', () => render(false));
+render(true);
+</script>

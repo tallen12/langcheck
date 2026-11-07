@@ -16,7 +16,12 @@ from langcheck.correction.models import (
 )
 from langcheck.correction.place import place_corrections
 from langcheck.correction.schemas import ReplyCorrection
-from langcheck.proposal.protocols import Proposal, ProposalRequest, ProposalSource
+from langcheck.proposal.protocols import (
+    Proposal,
+    ProposalRequest,
+    ProposalSource,
+    RerankObserver,
+)
 from langcheck.proposal.rerank import RerankPolicy, Scored, reranked
 from langcheck.proposal.targets import WordSpan
 from langcheck.tagging.alignment import CharSpan, split_words, word_spans
@@ -27,11 +32,11 @@ JUDGED: Final = 8
 """Proposals per flag that reach the filters, so rejected ones leave others to offer."""
 
 
-def proposer_policy(policy: CorrectionPolicy) -> CorrectionPolicy:
-    """``policy`` as a proposer needs it: its re-ranked order stands, and the gate decides
-    what is shown and how confidently.
+def proposer_policy(policy: CorrectionPolicy, gate: AbstainGate | None) -> CorrectionPolicy:
+    """``policy`` as a proposer needs it: its re-ranked order stands, and ``gate``, the one
+    saved with the proposer, decides what is shown and how confidently.
     """
-    return replace(policy, order=CandidateOrder.AS_WRITTEN, gate=AbstainGate())
+    return replace(policy, order=CandidateOrder.AS_WRITTEN, gate=gate)
 
 
 def word_span(spans: Sequence[CharSpan], flag: CharSpan) -> WordSpan:
@@ -61,6 +66,8 @@ class ProposerCorrector:
     reader: SentenceReader
     policy: CorrectionPolicy
     rerank: RerankPolicy = field(default_factory=RerankPolicy)
+    observer: RerankObserver | None = None
+    """Told every flag's proposals before and after reranking; ``None`` in normal use."""
 
     async def correct(
         self, flagged: Sequence[FlaggedSentence]
@@ -97,7 +104,10 @@ class ProposerCorrector:
             entries: list[Pending | Unavailable] = []
             for flag, proposals in zip(item.flags, per_flag, strict=True):
                 original = _flag_text(item, flag.span)
-                chosen = reranked(proposals, self.rerank)[:JUDGED]
+                ordered = reranked(proposals, self.rerank)
+                if self.observer is not None:
+                    self.observer.reranked(flag, proposals, ordered)
+                chosen = ordered[:JUDGED]
                 placed = place_corrections(
                     [_correction(original, s.text) for s in chosen],
                     item,
