@@ -43,7 +43,9 @@ class Format(StrEnum):
 class Source:
     """Where a set is published and which archive members it uses.
 
-    For ``M2`` the one member is the M2 file; for ``REFERENCES`` the first member is the
+    For ``M2`` the first member is the M2 file and an optional second one the sentences as
+    published, one per M2 sentence (tokenization splits words such as "build-up", which
+    cannot be rejoined from tokens alone); for ``REFERENCES`` the first member is the
     source sentences and the rest one reference each, line by line.
     """
 
@@ -85,25 +87,37 @@ SOURCES: dict[Dataset, Source] = {
     ),
     Dataset.CWEB_G_DEV: Source(
         url=CWEB_URL,
-        members=("CWEB-master/data/m2/CWEB-G.dev.m2",),
+        members=(
+            "CWEB-master/data/m2/CWEB-G.dev.m2",
+            "CWEB-master/data/raw/CWEB-G.dev.source",
+        ),
         format=Format.M2,
         licence=CWEB_LICENCE,
     ),
     Dataset.CWEB_S_DEV: Source(
         url=CWEB_URL,
-        members=("CWEB-master/data/m2/CWEB-S.dev.m2",),
+        members=(
+            "CWEB-master/data/m2/CWEB-S.dev.m2",
+            "CWEB-master/data/raw/CWEB-S.dev.source",
+        ),
         format=Format.M2,
         licence=CWEB_LICENCE,
     ),
     Dataset.CWEB_G_TEST: Source(
         url=CWEB_URL,
-        members=("CWEB-master/data/m2/CWEB-G.test.m2",),
+        members=(
+            "CWEB-master/data/m2/CWEB-G.test.m2",
+            "CWEB-master/data/raw/CWEB-G.test.source",
+        ),
         format=Format.M2,
         licence=CWEB_LICENCE,
     ),
     Dataset.CWEB_S_TEST: Source(
         url=CWEB_URL,
-        members=("CWEB-master/data/m2/CWEB-S.test.m2",),
+        members=(
+            "CWEB-master/data/m2/CWEB-S.test.m2",
+            "CWEB-master/data/raw/CWEB-S.test.source",
+        ),
         format=Format.M2,
         licence=CWEB_LICENCE,
     ),

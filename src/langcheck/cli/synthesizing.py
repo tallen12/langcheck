@@ -90,9 +90,9 @@ def synth_app(env: CliEnvironment, *, guarded: Guard) -> App:
                 if SOURCES[dataset].format is not Format.M2:
                     env.err(f"langcheck: {dataset.value} has no typed edits to learn from")
                     return FAILED
-                [path] = dataset_files(
-                    dataset, data if data is not None else env.cwd / DEFAULT_DATA
-                )
+                path = dataset_files(dataset, data if data is not None else env.cwd / DEFAULT_DATA)[
+                    0
+                ]
                 if not path.is_file():
                     env.err(f"langcheck: run `langcheck evaluate fetch {dataset.value}` first")
                     return FAILED

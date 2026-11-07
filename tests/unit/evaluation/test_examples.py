@@ -12,6 +12,7 @@ from langcheck.evaluation.examples import (
     checked_text,
     load_corrected_pairs,
     load_examples,
+    written_text,
 )
 from langcheck.evaluation.m2 import GoldEdit, read_m2
 from langcheck.evaluation.models import ScoredEdit
@@ -81,6 +82,28 @@ def test_checked_text_keeps_tokens_the_annotator_would_split_differently() -> No
         "A well-known fact ."
     )
     assert checked_text(("A", "fact", "."), PunctuationTokens()) == "A fact."
+
+
+def test_published_sentences_are_kept_and_checked_when_they_tokenize_back(
+    tmp_path: Path,
+) -> None:
+    hyphen = "S A build - up .\n\nS He go home .\n"
+    m2, raw = tmp_path / "set.m2", tmp_path / "set.source"
+    m2.write_text(hyphen, encoding="utf-8")
+    raw.write_text("A build-up.\nHe  go home.\n", encoding="utf-8")
+
+    first, second = load_examples(Dataset.CWEB_G_DEV, [m2, raw], PunctuationTokens())
+
+    assert (first.text, first.written) == ("A build-up.", "A build-up.")
+    assert written_text(("He", "go", "home", "."), "He went home.", PunctuationTokens()) == (
+        "He go home."
+    )
+    assert second.written == "He  go home."
+
+
+def test_published_sentences_must_cover_the_set() -> None:
+    with pytest.raises(DatasetError, match="written lines"):
+        annotated_examples(read_m2(M2), TokenDiffAnnotator(), written=["one"])
 
 
 def test_reference_sets_get_one_annotator_per_reference(tmp_path: Path) -> None:

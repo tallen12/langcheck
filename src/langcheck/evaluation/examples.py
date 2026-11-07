@@ -24,6 +24,8 @@ class Example:
     source: tuple[str, ...]
     annotators: tuple[tuple[ScoredEdit, ...], ...]
     text: str
+    written: str | None = None
+    """The sentence as published, when the set keeps it beside its tokens."""
 
     @property
     def tokenized(self) -> bool:
@@ -67,18 +69,42 @@ def checked_text(source: Sequence[str], annotator: EditAnnotator) -> str:
     return text if annotator.tokenize(text) == list(source) else " ".join(source)
 
 
+def written_text(source: Sequence[str], written: str, annotator: EditAnnotator) -> str:
+    """``written`` when the annotator splits it into exactly ``source``, which keeps
+    words such as "build-up" that tokens alone cannot rejoin; else :func:`checked_text`.
+    """
+    if annotator.tokenize(written) == list(source):
+        return written
+    return checked_text(source, annotator)
+
+
 def annotated_examples(
-    sentences: Sequence[AnnotatedSentence], annotator: EditAnnotator
+    sentences: Sequence[AnnotatedSentence],
+    annotator: EditAnnotator,
+    *,
+    written: Sequence[str] | None = None,
 ) -> list[Example]:
-    """``sentences`` with their gold edits typed, as the checker is given them."""
-    return [
-        Example(
-            s.tokens,
-            tuple(tuple(annotator.gold_edits(s.tokens, edits)) for edits in s.annotators),
-            checked_text(s.tokens, annotator),
+    """``sentences`` with their gold edits typed, as the checker is given them.
+
+    ``written`` holds each sentence as published, in the same order, when the set has it.
+    """
+    if written is not None and len(written) < len(sentences):
+        msg = f"{len(sentences)} sentences but {len(written)} written lines"
+        raise DatasetError(msg)
+    examples: list[Example] = []
+    for index, s in enumerate(sentences):
+        line = written[index] if written is not None else None
+        examples.append(
+            Example(
+                s.tokens,
+                tuple(tuple(annotator.gold_edits(s.tokens, edits)) for edits in s.annotators),
+                written_text(s.tokens, line, annotator)
+                if line is not None
+                else checked_text(s.tokens, annotator),
+                line,
+            )
         )
-        for s in sentences
-    ]
+    return examples
 
 
 def load_examples(
@@ -93,7 +119,8 @@ def load_examples(
     match source.format:
         case Format.M2:
             sentences = read_m2(files[0].read_text(encoding="utf-8"))[:limit]
-            return annotated_examples(sentences, annotator)
+            written = _lines(files[1]) if len(files) > 1 else None
+            return annotated_examples(sentences, annotator, written=written)
         case Format.REFERENCES:
             sources, *references = [_lines(path) for path in files]
             if any(len(lines) != len(sources) for lines in references):

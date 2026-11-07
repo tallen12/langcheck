@@ -711,11 +711,38 @@ in this order: steps 2 to 6 depend on each other, 7 and 8 stand alone, 9 needs 1
    and pending counts, sentences with an error left, each judge's verdicts and how often
    each pair of judges agrees. Evaluate reports do not keep each sentence's edits, so a
    run's edits reach the panel only through a corrections file for now.
+
+   *Prompt `judge-v2`*, after reading the first 100 `judge-v1` verdicts on CWEB-G dev:
+
+   - **Published text.** CWEB's M2 tokens split hyphenated words (`build - up`), which
+     cannot be rejoined from tokens, so judges reported errors the writer never made.
+     CWEB sets now also fetch the sentences as published (`data/raw/*.source`, one per
+     M2 sentence); the judge sees them, and edits are applied to the published
+     characters. The checker gets the published sentence too whenever it tokenizes to the
+     set's tokens, so CWEB scores from before this change are not comparable.
+   - **Whole corrections.** Each annotator's or run's correction is shown whole, with its
+     edits listed under it, and every edit is judged with the rest of its correction
+     applied. Identical corrections are shown once with their makers' labels joined.
+   - **Linked edits.** Each verdict lists the other edits of the same correction it only
+     works with: a moved word's removal and insertion, paired quotes or brackets, words
+     that must agree. Moves and paired marks are also found from their shape. Linked
+     edits are *non-local* fixes: the proposer only proposes edits within one span, so it
+     cannot make them yet. They are stored with their links (`linked` on each edit
+     judgment), counted apart in `judge show`, and must stay marked in clean sets and
+     training data so a future non-local model can train on them and the local proposer
+     is not scored or trained against them.
+   - **Preference.** When a sentence has several corrections, each judge names the one
+     that fixes it best, a tie, or none. Per-edit verdicts are kept, so a checker that
+     makes either of two valid fixes is not penalized; the preference picks which
+     correction a clean set uses as its main reference.
 4. **Clean sets.** Rewrite a set from the consensus: keep gold edits judged valid, drop
    those judged neutral or wrong, and add edits from any run judged valid that overlap no
    kept edit. A sentence the panel says still has an error that no pooled edit fixes, or
    that has a disputed edit, is left out and counted. The result is JSONL pairs with
-   context. One made from an evaluation set is marked as evaluation data (see
+   context. The preferred correction is the main reference and other valid corrections
+   are kept as further annotators. Each edit carries its scope, local or linked, so a
+   model that only makes local edits is scored and trained on local edits alone. One
+   made from an evaluation set is marked as evaluation data (see
    `langcheck synth`) and is only evaluated on; one made from a corpus whose licence
    allows it, such as the OmniGEC training side, may also be trained on.
 5. **Judged scores.** Reports keep raw ERRANT F0.5 and add scores against the clean set:
@@ -789,6 +816,11 @@ second feature that lands after it.
 - **Whole-sentence options vs span options.** The plan scores span replacements inside
   the original sentence. If the LLM often needs several linked edits (agreement across a
   clause), allow an issue to carry a multi-span edit.
+- **Non-local edits.** The proposer proposes a replacement for one span at a time, so
+  fixes whose edits only work together (a moved word, paired quotes, agreement across a
+  clause) are out of its reach. The judge panel marks these as linked; how often they
+  occur in each set decides when to extend the model, for example with multi-span
+  proposals or a sentence-level rewrite stage, trained on the data marked linked.
 - **Local proposer instead of the LLM.** `correction.proposer` swaps the LLM for a 39 MB
   decoder on the frozen tagger (`langcheck proposer train`), with `AbstainGate` hiding
   corrections unlikely to help. On the LLM's 500 `bea19-dev` sentences F0.5 is 0.460 against

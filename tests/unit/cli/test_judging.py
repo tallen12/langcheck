@@ -37,10 +37,12 @@ class JudgeServer:
         self.models.append(body["model"])
         if self.broken:
             return httpx.Response(200, json={"choices": [{"message": {"content": "no"}}]})
-        edits = re.findall(r"^(\d+)\. ", body["messages"][1]["content"], re.M)
+        edits = re.findall(r"^\s+(\d+)\. ", body["messages"][1]["content"], re.M)
         verdict = "valid" if body["model"].startswith("judge-") else "wrong"
         reply = {
             "edits": [{"edit": int(n), "reason": "r", "verdict": verdict} for n in edits],
+            "preferred_reason": "",
+            "preferred": "A",
             "remaining_reason": "",
             "remaining_error": False,
         }
@@ -56,9 +58,10 @@ def run(tmp_path: Path, server: JudgeServer, *argv: str) -> tuple[int, Cli]:
 
 
 def fetched(root: Path) -> None:
-    [path] = dataset_files(Dataset.CWEB_G_DEV, root / "data" / "eval")
-    path.parent.mkdir(parents=True)
-    path.write_text(M2, encoding="utf-8")
+    m2, raw = dataset_files(Dataset.CWEB_G_DEV, root / "data" / "eval")
+    m2.parent.mkdir(parents=True)
+    m2.write_text(M2, encoding="utf-8")
+    raw.write_text("He go to school.\nIt is fine.\n", encoding="utf-8")
 
 
 def test_the_panel_judges_gold_and_run_edits_and_stores_each_verdict(tmp_path: Path) -> None:
@@ -178,12 +181,18 @@ def test_an_unfetched_set_or_a_bad_quorum_is_refused(tmp_path: Path) -> None:
 
 def test_the_summary_names_each_judges_counts_and_agreement() -> None:
     summary = Summary(
-        {source: Tally() for source in Source}, Tally(), {"a": Counter()}, {("a", "b"): 0.5}
+        {source: Tally() for source in Source},
+        dict.fromkeys(Source, 0),
+        Tally(Counter({"annotator 2": 3, "tie": 1})),
+        Tally(),
+        {"a": Counter()},
+        {("a", "b"): 0.5},
     )
 
     text = render_summary(summary)
 
     assert "edits" not in text
+    assert "best correction: 4 (annotator 2 3, tie 1, disputed 0, pending 0)" in text
     assert "error left in sentence: 0 (yes 0, no 0, disputed 0, pending 0)" in text
     assert "a: nothing judged" in text
     assert "agreement a / b: 50%" in text

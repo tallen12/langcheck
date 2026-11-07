@@ -213,32 +213,34 @@ def pooled(
     annotator: EditAnnotator,
     out: Callable[[str], None],
 ) -> list[Item]:
-    """Each example with its gold edits and the edits each corrections file makes to it.
+    """Each example with its gold corrections and each corrections file's, named after
+    the file.
 
     A corrections line belongs to the example whose checked text it holds; lines matching
     no example are counted and left out.
     """
-    runs: list[dict[str, str]] = []
+    runs: list[tuple[str, dict[str, str]]] = []
+    texts = {example.text for example in examples}
     for path in corrections:
         found: dict[str, str] = {}
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 pair = CorrectedPair.model_validate_json(line)
                 found[pair.text] = pair.corrected
-        texts = {example.text for example in examples}
         unmatched = sum(text not in texts for text in found)
         if unmatched:
             out(f"{path}: {unmatched} of {len(found)} lines match no sentence of the set")
-        runs.append(found)
+        runs.append((path.stem, found))
     return [
         pool_item(
             example.source,
             gold=example.annotators,
             runs=[
-                annotator.system_edits(example.source, run[example.text])
-                for run in runs
+                (name, annotator.system_edits(example.source, run[example.text]))
+                for name, run in runs
                 if example.text in run
             ],
+            written=example.written,
         )
         for example in examples
     ]
@@ -246,11 +248,15 @@ def pooled(
 
 def render_summary(summary: Summary) -> str:
     """The panel's consensus as a few lines of text."""
-    lines = [
-        _tally_line(f"{source} edits", summary.edits[source], ("valid", "neutral", "wrong"))
-        for source in Source
-        if summary.edits[source].total
-    ]
+    lines: list[str] = []
+    for source in Source:
+        if summary.edits[source].total:
+            verdicts = ("valid", "neutral", "wrong")
+            lines.append(_tally_line(f"{source} edits", summary.edits[source], verdicts))
+            lines.append(f"  linked, non-local: {summary.linked[source]}")
+    if summary.preferences.total:
+        ranked = tuple(label for label, _ in summary.preferences.agreed.most_common())
+        lines.append(_tally_line("best correction", summary.preferences, ranked))
     lines.append(_tally_line("error left in sentence", summary.remaining, ("True", "False")))
     for judge, counts in summary.by_judge.items():
         shown = ", ".join(f"{verdict} {n}" for verdict, n in sorted(counts.items()))

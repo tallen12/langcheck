@@ -6,71 +6,108 @@ holds one model at a time loads each model once. Every answer is stored as it ar
 
 import asyncio
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass, field
 from itertools import combinations
 from typing import assert_never
 
 from langcheck.evaluation.models import ScoredEdit
-from langcheck.judging.consensus import Agreed, Disputed, Pending, consensus
+from langcheck.judging.consensus import Agreed, Consensus, Disputed, Pending, consensus
+from langcheck.judging.links import shape_links
 from langcheck.judging.models import (
     Candidate,
+    Choice,
     EditJudgment,
+    EditKey,
     Item,
     Judged,
     Judgment,
+    NoneBetter,
     NotJudged,
+    PreferenceJudgment,
+    Preferred,
     SentenceJudgment,
     SentenceKey,
     Source,
+    Tied,
     Verdict,
+    Version,
 )
 from langcheck.judging.protocols import EditJudge, JudgmentStore
 
 DEFAULT_CONCURRENCY = 4
 PROGRESS_EVERY = 25
+GOLD_LABEL = "annotator {}"
+LABEL_SEPARATOR = ", "
 
 type EditId = tuple[SentenceKey, int, int, tuple[str, ...]]
+type Made = tuple[str, Source, Sequence[EditKey]]
+"""Who made a correction, whether it is gold, and its edits."""
 
 
 def pool_item(
     tokens: Sequence[str],
     *,
     gold: Sequence[Sequence[ScoredEdit]],
-    runs: Sequence[Sequence[ScoredEdit]] = (),
+    runs: Sequence[tuple[str, Sequence[ScoredEdit]]] = (),
     context: str = "",
+    written: str | None = None,
 ) -> Item:
-    """One sentence with every distinct edit any annotator or run made, in token order."""
-    sources: dict[tuple[int, int, tuple[str, ...]], set[Source]] = {}
-    for edits, source in [(e, Source.GOLD) for e in gold] + [(e, Source.RUN) for e in runs]:
-        for edit in edits:
-            sources.setdefault(edit.key, set()).add(source)
+    """One sentence with each annotator's and run's correction and every distinct edit
+    any of them made, in token order. Gold corrections are labelled ``annotator <n>``,
+    runs by their name; corrections without edits are left out.
+    """
+    made: list[Made] = [
+        (GOLD_LABEL.format(n), Source.GOLD, [edit.key for edit in edits])
+        for n, edits in enumerate(gold, start=1)
+    ]
+    made += [(name, Source.RUN, [edit.key for edit in edits]) for name, edits in runs]
+    return _item(tokens, context, written, made)
+
+
+def _item(tokens: Sequence[str], context: str, written: str | None, made: Sequence[Made]) -> Item:
+    sources: dict[EditKey, set[Source]] = {}
+    labels: dict[tuple[EditKey, ...], list[str]] = {}
+    for label, source, edits in made:
+        if not edits:
+            continue
+        for key in edits:
+            sources.setdefault(key, set()).add(source)
+        owners = labels.setdefault(tuple(sorted(set(edits))), [])
+        owners += [part for part in label.split(LABEL_SEPARATOR) if part not in owners]
     candidates = tuple(
         Candidate(start, end, correction, frozenset(found))
         for (start, end, correction), found in sorted(sources.items())
     )
-    return Item(tuple(tokens), context, candidates)
+    versions = tuple(Version(LABEL_SEPARATOR.join(owners), key) for key, owners in labels.items())
+    return Item(tuple(tokens), context, candidates, versions, written)
 
 
 def merged(items: Sequence[Item]) -> list[Item]:
     """One item per sentence, in first-seen order: a sentence that appears more than once
-    in a set is judged once, with the edits of every appearance.
+    in a set is judged once, with the corrections of every appearance.
     """
-    found: dict[SentenceKey, Item] = {}
+    found: dict[SentenceKey, list[Item]] = {}
     for item in items:
-        earlier = found.get(item.key)
-        if earlier is None:
-            found[item.key] = item
+        found.setdefault(item.key, []).append(item)
+    result: list[Item] = []
+    for group in found.values():
+        first = group[0]
+        if len(group) == 1:
+            result.append(first)
             continue
-        sources: dict[tuple[int, int, tuple[str, ...]], frozenset[Source]] = {}
-        for candidate in (*earlier.candidates, *item.candidates):
-            sources[candidate.key] = sources.get(candidate.key, frozenset()) | candidate.sources
-        candidates = tuple(
-            Candidate(start, end, correction, found_in)
-            for (start, end, correction), found_in in sorted(sources.items())
-        )
-        found[item.key] = Item(earlier.tokens, earlier.context, candidates)
-    return list(found.values())
+        made: list[Made] = []
+        for item in group:
+            sources = {c.key: c.sources for c in item.candidates}
+            for version in item.versions:
+                source = (
+                    Source.GOLD
+                    if all(Source.GOLD in sources[key] for key in version.edits)
+                    else Source.RUN
+                )
+                made.append((version.label, source, version.edits))
+        result.append(_item(first.tokens, first.context, first.written, made))
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +122,7 @@ class JudgeRun:
 
 def judgments_for(judge: str, item: Item, result: Judged) -> list[Judgment]:
     """The store records of ``judge``'s answer on ``item``."""
+    keys = [candidate.key for candidate in item.candidates]
     records: list[Judgment] = [
         EditJudgment(
             sentence=item.key,
@@ -92,10 +130,11 @@ def judgments_for(judge: str, item: Item, result: Judged) -> list[Judgment]:
             end=candidate.end,
             correction=candidate.correction,
             judge=judge,
-            verdict=verdict,
-            reason=reason,
+            verdict=verdict.verdict,
+            reason=verdict.reason,
+            linked=tuple(keys[i] for i in verdict.linked),
         )
-        for candidate, (verdict, reason) in zip(item.candidates, result.verdicts, strict=True)
+        for candidate, verdict in zip(item.candidates, result.verdicts, strict=True)
     ]
     records.append(
         SentenceJudgment(
@@ -105,6 +144,43 @@ def judgments_for(judge: str, item: Item, result: Judged) -> list[Judgment]:
             reason=result.reason,
         )
     )
+    labels = tuple(version.label for version in item.versions)
+    match result.preference:
+        case None:
+            pass
+        case Preferred(index, reason):
+            records.append(
+                PreferenceJudgment(
+                    sentence=item.key,
+                    judge=judge,
+                    versions=labels,
+                    choice=Choice.VERSION,
+                    preferred=labels[index],
+                    reason=reason,
+                )
+            )
+        case Tied(reason):
+            records.append(
+                PreferenceJudgment(
+                    sentence=item.key,
+                    judge=judge,
+                    versions=labels,
+                    choice=Choice.TIE,
+                    reason=reason,
+                )
+            )
+        case NoneBetter(reason):
+            records.append(
+                PreferenceJudgment(
+                    sentence=item.key,
+                    judge=judge,
+                    versions=labels,
+                    choice=Choice.NONE,
+                    reason=reason,
+                )
+            )
+        case unreachable:
+            assert_never(unreachable)
     return records
 
 
@@ -120,6 +196,8 @@ def unjudged(items: Sequence[Item], judge: str, stored: Sequence[Judgment]) -> l
                 edits.add((record.sentence, *record.edit))
             case SentenceJudgment():
                 sentences.add(record.sentence)
+            case PreferenceJudgment():
+                pass
             case unreachable:
                 assert_never(unreachable)
     return [
@@ -199,11 +277,16 @@ class Summary:
     """The panel's consensus on a set's pooled edits and sentences.
 
     ``edits`` is keyed by where the edits came from; an edit both gold and a run made
-    counts in each. ``remaining`` tallies whether an error is left in each sentence.
-    ``agreement`` is, per pair of judges, the share of edits both rated the same.
+    counts in each. ``linked`` counts, by source, the edits that only work together with
+    another (non-local fixes), by the panel's consensus or by their shape. ``preferences``
+    tallies the best correction of sentences with several, by label, ``tie`` or ``none``.
+    ``remaining`` tallies whether an error is left in each sentence. ``agreement`` is, per
+    pair of judges, the share of edits both rated the same.
     """
 
     edits: dict[Source, Tally]
+    linked: dict[Source, int]
+    preferences: Tally
     remaining: Tally
     by_judge: dict[str, Counter[Verdict]]
     agreement: dict[tuple[str, str], float]
@@ -218,7 +301,9 @@ def summarize(
 ) -> Summary:
     """The consensus of ``judges`` (only these vote) on every item's edits and sentence."""
     verdicts: dict[EditId, dict[str, Verdict]] = {}
+    links: dict[EditId, dict[str, bool]] = {}
     remaining: dict[SentenceKey, dict[str, bool]] = {}
+    preferred: dict[SentenceKey, dict[str, str]] = {}
     panel = set(judges)
     for record in stored:
         if record.judge not in panel:
@@ -226,29 +311,47 @@ def summarize(
         # Later records replace earlier ones from the same judge.
         match record:
             case EditJudgment():
-                verdicts.setdefault((record.sentence, *record.edit), {})[record.judge] = (
-                    record.verdict
-                )
+                edit = (record.sentence, *record.edit)
+                verdicts.setdefault(edit, {})[record.judge] = record.verdict
+                links.setdefault(edit, {})[record.judge] = bool(record.linked)
             case SentenceJudgment():
                 remaining.setdefault(record.sentence, {})[record.judge] = record.remaining_error
+            case PreferenceJudgment():
+                choice = record.preferred if record.choice is Choice.VERSION else record.choice
+                preferred.setdefault(record.sentence, {})[record.judge] = str(choice)
             case unreachable:
                 assert_never(unreachable)
-    unique = merged(items)
     edits = {source: _Counting() for source in Source}
+    linked = dict.fromkeys(Source, 0)
     sentences = _Counting()
+    preferences = _Counting()
     by_judge = {judge: Counter[Verdict]() for judge in judges}
-    for item in unique:
-        votes = remaining.get(item.key, {})
-        sentences.add(consensus(list(votes.values()), judges=len(judges), quorum=quorum))
+
+    def vote[T: Hashable](given: dict[str, T]) -> Consensus[T]:
+        return consensus(list(given.values()), judges=len(judges), quorum=quorum)
+
+    for item in merged(items):
+        sentences.add(vote(remaining.get(item.key, {})))
+        if len(item.versions) > 1:
+            preferences.add(vote(preferred.get(item.key, {})))
+        shaped: set[EditKey] = set()
+        for version in item.versions:
+            shaped |= set(shape_links(item.tokens, version.edits))
         for candidate in item.candidates:
-            given = verdicts.get((item.key, *candidate.key), {})
+            edit = (item.key, *candidate.key)
+            given = verdicts.get(edit, {})
             for judge, verdict in given.items():
                 by_judge[judge][verdict] += 1
-            outcome = consensus(list(given.values()), judges=len(judges), quorum=quorum)
+            outcome = vote(given)
+            said = vote(links.get(edit, {}))
+            is_linked = candidate.key in shaped or (isinstance(said, Agreed) and said.value)
             for source in candidate.sources:
                 edits[source].add(outcome)
+                linked[source] += is_linked
     return Summary(
         {source: counting.tally() for source, counting in edits.items()},
+        linked,
+        preferences.tally(),
         sentences.tally(),
         by_judge,
         _agreement(verdicts, judges),
@@ -261,7 +364,7 @@ class _Counting:
     disputed: int = 0
     pending: int = 0
 
-    def add(self, outcome: Agreed[Verdict] | Agreed[bool] | Disputed | Pending) -> None:
+    def add[T: Hashable](self, outcome: Consensus[T]) -> None:
         match outcome:
             case Agreed(value=value):
                 self.agreed[str(value)] += 1

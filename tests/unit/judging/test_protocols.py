@@ -1,7 +1,15 @@
 import asyncio
 from collections.abc import Sequence
 
-from langcheck.judging.models import Item, Judged, JudgeResult, Judgment, SentenceJudgment, Verdict
+from langcheck.judging.models import (
+    EditVerdict,
+    Item,
+    Judged,
+    JudgeResult,
+    Judgment,
+    SentenceJudgment,
+    Verdict,
+)
 from langcheck.judging.protocols import EditJudge, JudgmentStore
 
 
@@ -13,7 +21,7 @@ class Agreeable:
         return "agreeable"
 
     async def judge(self, item: Item) -> JudgeResult:
-        return Judged(tuple((Verdict.VALID, "") for _ in item.candidates), False, "")
+        return Judged(tuple(EditVerdict(Verdict.VALID, "") for _ in item.candidates), False, "")
 
 
 class ListStore:

@@ -434,7 +434,7 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
         return data if data is not None else env.cwd / DEFAULT_DATA
 
     def read_set(dataset: Dataset, data: Path | None) -> list[AnnotatedSentence] | None:
-        [path] = dataset_files(dataset, data_dir(data))
+        path = dataset_files(dataset, data_dir(data))[0]
         if not path.is_file():
             env.err(f"langcheck: run `langcheck evaluate fetch {dataset.value}` first")
             return None

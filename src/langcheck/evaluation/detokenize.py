@@ -36,9 +36,14 @@ def detokenize(tokens: Sequence[str]) -> str:
             else:
                 open_quotes.add(token)
                 glue_next = True
-        elif token in _ATTACH_LEFT or token.lower() in _CLITICS:
+        elif attaches_left(token):
             glue = True
         elif token in _ATTACH_RIGHT:
             glue_next = True
         parts.append(token if glue else f" {token}")
     return "".join(parts)
+
+
+def attaches_left(token: str) -> bool:
+    """Whether ``token`` is written without a space before it (punctuation, clitics)."""
+    return token in _ATTACH_LEFT or token.lower() in _CLITICS

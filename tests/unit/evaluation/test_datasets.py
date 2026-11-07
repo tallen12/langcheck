@@ -47,12 +47,13 @@ class ServedArchive:
         destination.write_bytes(self.body)
 
 
-def test_every_set_has_a_source_and_m2_sets_one_member() -> None:
+def test_every_set_has_a_source_and_m2_sets_an_m2_file_then_maybe_raw_text() -> None:
     assert set(SOURCES) == set(Dataset)
     for dataset, source in SOURCES.items():
         assert source.url.startswith("https://")
         if source.format is Format.M2:
-            assert len(source.members) == 1, dataset
+            assert source.members[0].endswith(".m2"), dataset
+            assert len(source.members) in {1, 2}, dataset
 
 
 def test_fetches_an_m2_set_once_and_keeps_only_its_file(tmp_path: Path) -> None:
@@ -106,6 +107,7 @@ def test_the_cweb_sets_read_their_combined_m2_file_from_one_archive() -> None:
 
     assert len({SOURCES[dataset].url for dataset in expected}) == 1
     for dataset, name in expected.items():
-        [member] = SOURCES[dataset].members
+        member, raw = SOURCES[dataset].members
         assert SOURCES[dataset].format is Format.M2
         assert member == f"CWEB-master/data/m2/{name}"
+        assert raw == f"CWEB-master/data/raw/{name.removesuffix('.m2')}.source"

@@ -11,6 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field
 type SentenceKey = str
 """Stable id of a sentence: a hash of its tokens, so judgments pool across runs."""
 
+type EditKey = tuple[int, int, tuple[str, ...]]
+"""Source tokens ``[start, end)`` and the tokens that replace them."""
+
 
 class Verdict(StrEnum):
     """What a judge says one edit does."""
@@ -40,18 +43,34 @@ class Candidate:
     sources: frozenset[Source]
 
     @property
-    def key(self) -> tuple[int, int, tuple[str, ...]]:
+    def key(self) -> EditKey:
         """What two candidates must share to be the same edit."""
         return self.start, self.end, self.correction
 
 
 @dataclass(frozen=True, slots=True)
+class Version:
+    """One whole correction of a sentence: an annotator's or a run's edits together.
+
+    ``label`` names who made it (``annotator 1``, a run's name); identical corrections
+    from several makers are one version with their labels joined.
+    """
+
+    label: str
+    edits: tuple[EditKey, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class Item:
-    """One sentence and every pooled edit on it, judged together."""
+    """One sentence, every pooled edit on it and the corrections they come from, judged
+    together. ``written`` is the sentence as published, when the set keeps it.
+    """
 
     tokens: tuple[str, ...]
     context: str
     candidates: tuple[Candidate, ...]
+    versions: tuple[Version, ...] = ()
+    written: str | None = None
 
     @property
     def key(self) -> SentenceKey:
@@ -68,7 +87,13 @@ _RECORD = ConfigDict(frozen=True, extra="forbid")
 
 
 class EditJudgment(BaseModel):
-    """One judge's verdict on one edit: a line of the judgment store."""
+    """One judge's verdict on one edit: a line of the judgment store.
+
+    ``linked`` lists the other edits this one is only right together with, such as the
+    two halves of a moved word or a pair of quotes. A linked edit is a non-local fix:
+    the proposer only makes edits within one span, so these are kept apart from local
+    edits until a model can make them.
+    """
 
     model_config = _RECORD
 
@@ -80,15 +105,16 @@ class EditJudgment(BaseModel):
     judge: str
     verdict: Verdict
     reason: str
+    linked: tuple[EditKey, ...] = ()
 
     @property
-    def edit(self) -> tuple[int, int, tuple[str, ...]]:
+    def edit(self) -> EditKey:
         """The judged edit's key, as :attr:`Candidate.key`."""
         return self.start, self.end, self.correction
 
 
 class SentenceJudgment(BaseModel):
-    """One judge's answer to whether the sentence, with the edits it judged valid
+    """One judge's answer to whether the sentence, with the best correction's valid edits
     applied, still has an error.
     """
 
@@ -101,16 +127,82 @@ class SentenceJudgment(BaseModel):
     reason: str
 
 
-type Judgment = Annotated[EditJudgment | SentenceJudgment, Field(discriminator="type")]
+class Choice(StrEnum):
+    """What a judge prefers among a sentence's competing corrections."""
+
+    VERSION = "version"
+    """One correction fixes the sentence best."""
+    TIE = "tie"
+    """The best corrections are equally good."""
+    NONE = "none"
+    """None of them improves the sentence."""
+
+
+class PreferenceJudgment(BaseModel):
+    """One judge's choice of the correction that fixes a sentence best, among
+    ``versions`` (their labels, as shown). ``preferred`` is set only for ``VERSION``.
+    """
+
+    model_config = _RECORD
+
+    type: Literal["preference"] = "preference"
+    sentence: SentenceKey
+    judge: str
+    versions: tuple[str, ...]
+    choice: Choice
+    preferred: str | None = None
+    reason: str
+
+
+type Judgment = Annotated[
+    EditJudgment | SentenceJudgment | PreferenceJudgment, Field(discriminator="type")
+]
+
+
+@dataclass(frozen=True, slots=True)
+class EditVerdict:
+    """A judge's verdict on one candidate and the candidates it is linked to, by index."""
+
+    verdict: Verdict
+    reason: str
+    linked: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Preferred:
+    """The correction at ``index`` in the item's versions fixes the sentence best."""
+
+    index: int
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class Tied:
+    """The best corrections are equally good."""
+
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class NoneBetter:
+    """No correction improves the sentence."""
+
+    reason: str
+
+
+type Preference = Preferred | Tied | NoneBetter
 
 
 @dataclass(frozen=True, slots=True)
 class Judged:
-    """A judge's verdicts on one item, in candidate order, and whether an error remains."""
+    """A judge's verdicts on one item, in candidate order, whether an error remains and,
+    when the item has competing corrections, which is best.
+    """
 
-    verdicts: tuple[tuple[Verdict, str], ...]
+    verdicts: tuple[EditVerdict, ...]
     remaining_error: bool
     reason: str
+    preference: Preference | None = None
 
 
 @dataclass(frozen=True, slots=True)
