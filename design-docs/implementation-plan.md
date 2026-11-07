@@ -662,44 +662,71 @@ synthetic errors alone risks fitting the noise model, so evaluation needs real e
 from outside that distribution.
 
 The plan judges edits instead of trusting gold alone. It is built on `feat/realistic-eval`
-in this order: steps 2 to 5 depend on each other, 6 and 7 stand alone, 8 needs 1 and 3.
+in this order: steps 2 to 6 depend on each other, 7 and 8 stand alone, 9 needs 1 and 3.
 
 1. **Baseline under the new rules.** Retrain the tagger and proposer on corrupted clean
    prose (built-in tables, noise-model pairs, `--tables`) and record raw ERRANT scores on
    CWEB-G and CWEB-S dev, JFLEG dev, CoNLL-2014, the odd half of the OmniGEC holdout and
    WikEd. Every later number is compared with this one.
 2. **Judgment store.** Each unique edit, keyed by its sentence and the span and words it
-   writes, is judged once as *valid* (fixes an error), *neutral* (acceptable but not
-   needed, such as style) or *wrong*, with who judged it (an LLM by model and prompt
-   version, or a person) and a short reason. Gold edits are judged the same way, so
-   style-only gold can leave the recall denominator. Judgments are pooled across every
-   system and run on a set, so a new run only needs its new edits judged. The store is
-   JSONL under `data/judgments/<set>/`, never committed: CWEB's ShareAlike licence covers
-   anything derived from it.
-3. **LLM judge.** An `EditJudge` protocol with an adapter on the OpenAI-compatible client.
-   The judge sees the sentence, its context and one edit, and answers in a schema. It
-   must be a different model family from the corrector being measured, or the LLM
-   corrector is favoured over the local proposer. It judges only edits the store lacks.
-4. **Adjusted scores.** Reports keep raw ERRANT F0.5 and add judged scores: precision is
-   gold matches plus edits judged valid, over all edits except neutral ones; recall is
-   over gold edits judged valid. Reports show how many edits are judged, and judged
-   scores are not given below full coverage.
-5. **Human audit.** Export the judge's disagreements with gold and a random sample of
-   its verdicts for review; imported human verdicts override the judge's. Reports give
-   the judge's agreement with people, which says how far to trust step 4.
-6. **False alarms on clean prose.** Flags per 1,000 words on held-out edited prose that
-   was not trained on. Nearly every flag there is wrong; the judge triages a sample for
+   writes, is judged as *valid* (fixes an error), *neutral* (acceptable but not needed,
+   such as style) or *wrong*, with who judged it (an LLM by model and prompt version, or a
+   person) and a short reason. Every judge's verdict is kept, not only the consensus.
+   Gold edits are judged the same way, so style-only gold can leave the recall
+   denominator. Judgments are pooled across every system and run on a set, so a new run
+   only needs its new edits judged. The store is JSONL under `data/judgments/<set>/`,
+   never committed: CWEB's ShareAlike licence covers anything derived from it.
+3. **A panel of LLM judges.** An `EditJudge` protocol with an adapter on the
+   OpenAI-compatible client; a panel holds several judges, each a different model, ideally
+   from different families. Each judge sees the sentence, its context and one edit, and
+   answers in a schema. An edit's consensus is the verdict most judges give, at a quorum
+   set per run (two of three by default); an edit below quorum is *disputed* and has no
+   consensus until a person decides it. None of the judges may share a family with the
+   corrector being measured, or the LLM corrector is favoured over the local proposer.
+   Each judge also says whether the sentence, with the valid edits applied, still has an
+   error. The panel judges only edits the store lacks a verdict from it for.
+
+   The panel runs on the Ollama server the settings already name, through its
+   OpenAI-compatible API, with reasoning on (judging is offline, so latency does not
+   matter). Of the models there, the default panel is three general instruction models
+   from different families: `qwen3:14b`, `gemma4:12b-it-q4_K_M` and `llama3.1:latest`
+   (8B). `qwen3.5:9b-q8_0` stands in for a member that shares a family with the
+   corrector being measured, such as `gemma4` while it is the configured LLM. Coding
+   models and the grammar fine-tunes on the server (`karen-editor`,
+   `mistral-grammar-checker`) are correctors, not judges, and are left out. Judges this
+   small disagree more than large hosted ones, so the audit in step 6 decides whether the
+   panel is good enough or needs a stronger member.
+4. **Clean sets.** Rewrite a set from the consensus: keep gold edits judged valid, drop
+   those judged neutral or wrong, and add edits from any run judged valid that overlap no
+   kept edit. A sentence the panel says still has an error that no pooled edit fixes, or
+   that has a disputed edit, is left out and counted. The result is JSONL pairs with
+   context. One made from an evaluation set is marked as evaluation data (see
+   `langcheck synth`) and is only evaluated on; one made from a corpus whose licence
+   allows it, such as the OmniGEC training side, may also be trained on.
+5. **Judged scores.** Reports keep raw ERRANT F0.5 and add scores against the clean set:
+   precision is gold matches plus edits judged valid, over all edits except neutral ones;
+   recall is over gold edits judged valid. Reports show how many edits have a consensus
+   and how many are disputed, and judged scores are not given below full coverage.
+6. **Human audit.** Export disputed edits, edits where the consensus disagrees with gold
+   and a random sample of consensus verdicts for review; imported human verdicts override
+   the panel. Reports give each judge's and the consensus's agreement with people, which
+   says how far to trust steps 4 and 5 and which judges to keep.
+7. **False alarms on clean prose.** Flags per 1,000 words on held-out edited prose that
+   was not trained on. Nearly every flag there is wrong; the panel triages a sample for
    the true rate. It needs no gold and is the closest measure of what an experienced
    writer sees.
-7. **Cross-noise gap.** Score on held-out prose corrupted by a generator the model was
-   not trained with (the noise model when trained on built-in tables, and the reverse),
-   against the same prose corrupted by its own training noise. A large gap means the
-   model fits its noise rather than errors.
-8. **Gate refit.** Fit `AbstainGate` from judged corrections on pairs that are not an
-   evaluation set, replacing the weights fitted partly on `bea19-dev`. The PLL filters
-   tuned on BEA-2019 dev are retuned the same way.
-9. **Locked test splits.** CWEB test sets only produce reported numbers. Tuning, epoch
-   choice and gate fitting use dev sets or files passed in, never a test split.
+8. **Cross-noise gap.** Score on held-out prose corrupted by a distribution the model was
+   not trained with, against the same prose corrupted by its own training noise.
+   `langcheck synth corrupt` writes either: the built-in tables, tables learned from
+   labeled pairs (`--tables`), or from a fetched evaluation set (`--from-set`, marked as
+   evaluation data and refused by training). The noise model gives a third. A large gap
+   means the model fits its noise rather than errors.
+9. **Gate refit.** Fit `AbstainGate` from judged corrections on pairs that are not an
+   evaluation set and save it with `langcheck proposer gate`. Each proposer loads the
+   `gate.json` beside it; one without a gate offers every correction the other filters
+   pass. The PLL filters tuned on BEA-2019 dev are retuned the same way.
+10. **Locked test splits.** CWEB test sets only produce reported numbers. Tuning, epoch
+    choice and gate fitting use dev sets or files passed in, never a test split.
 
 ## Features
 
@@ -720,16 +747,16 @@ depend on each other.
 | `feat/vscode` | M4 | Editor client. | LSP proxy (`langcheck lsp`); TypeScript extension in `editors/vscode/`, `just vscode` and its CI job |
 | `feat/libreoffice` | M5 | LibreOffice client. | Spike; UNO proofreader; import-rule check; `just libreoffice` and its CI job |
 | `feat/evaluation` | M6 | Measuring and tuning. | `evaluate` command with ERRANT scoring; `ScoringPolicy` tuning; model and prompt comparison |
-| `feat/realistic-eval` | M6 | Evaluation not bound to noisy gold. | CWEB and evaluation-only sets (done); baseline; judgment store; LLM judge; judged scores; human audit; false alarms on clean prose; cross-noise gap; gate refit |
+| `feat/realistic-eval` | M6 | Evaluation not bound to noisy gold. | CWEB and evaluation-only sets, gate loaded per proposer, `synth corrupt` (done); baseline; judgment store; judge panel and consensus; clean sets; judged scores; human audit; false alarms on clean prose; cross-noise gap; gate refit |
 
 A feature that grows past the limit while being built is split at a task boundary into a
 second feature that lands after it.
 
 ## Open questions
 
-- **Which model judges edits.** The judge in *Realistic evaluation* must not share a
-  family with the corrector it measures; a stronger hosted model is likely needed. Cost
-  and which model are undecided.
+- **Is the local judge panel good enough.** The panel in *Realistic evaluation* uses
+  three 8–15B models on the Ollama server. Whether their consensus agrees with people
+  often enough, and whether two of three is the right quorum, is decided by the audit.
 - **How much human review.** The audit's size sets how far judged scores can be trusted;
   a few hundred verdicts per set is the working guess.
 - **Default LLM model.** Any OpenAI-compatible server works; which model to recommend is
@@ -761,10 +788,11 @@ second feature that lands after it.
   proposer on the same tagger, without refitting the gate, moved F0.5 from 0.471 to 0.503 on
   the first 500 `bea19-dev` sentences, 0.286 to 0.380 on 500 WikEd sentences and 0.545 to
   0.587 on JFLEG dev; a tagger trained with both was no better. Models trained only on the
-  built-in tables are not measured yet. The `AbstainGate` weights, `proposer train`'s epoch
-  scoring and `proposer measure`'s tuning were fitted on `bea19-dev`; scoring and tuning
-  now take a pairs file (`--score-with`, `--tune-on`), and the gate still needs refitting
-  on data that is not an evaluation set.
+  built-in tables are not measured yet. `proposer train`'s epoch scoring and `proposer
+  measure`'s tuning were fitted on `bea19-dev`; they now take a pairs file
+  (`--score-with`, `--tune-on`). The gate's weights moved from the code to a `gate.json`
+  beside each proposer; the weights fitted partly on `bea19-dev` are no longer built in,
+  and a gate fitted off evaluation data is still to come.
 - **Larger context.** Context is two previous sentences of plain text in the encoder's input,
   capped at 256 tokens. A separate, larger context feature might help; nothing is measured.
 - **Scaling past one process.** Redis or SQL adapters for `DocumentStore` and
