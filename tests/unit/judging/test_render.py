@@ -43,3 +43,13 @@ def test_a_span_reads_as_published() -> None:
     assert written_span(TOKENS, 5, 7, WRITTEN) == "he  said"
     assert written_span(TOKENS, 1, 4) == "build - up"
     assert written_span(TOKENS, 2, 2, WRITTEN) == ""
+
+
+def test_an_inserted_hyphen_joins_the_words_on_both_sides() -> None:
+    tokens = ("her", "larger", "than", "life", "voice")
+    hyphens = [(2, 2, ("-",)), (3, 3, ("-",))]
+
+    assert render(tokens, hyphens, "her larger than life voice") == "her larger-than-life voice"
+    assert render(tokens, [(1, 1, ("-",))], "her larger than life voice") == (
+        "her-larger than life voice"
+    )

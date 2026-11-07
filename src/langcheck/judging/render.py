@@ -12,6 +12,8 @@ from dataclasses import dataclass, replace
 
 from langcheck.evaluation.detokenize import attaches_left, detokenize
 
+HYPHEN = "-"
+
 type Edit = tuple[int, int, tuple[str, ...]]
 """Source tokens ``[start, end)`` become the tokens given."""
 
@@ -71,7 +73,13 @@ def render(tokens: Sequence[str], edits: Sequence[Edit], written: str | None = N
             # Deleting a comma keeps the space after it until the boundary is chosen anew.
             gap = out[-1].gap or (published[end - 1].gap if end > start else "")
             out[-1] = replace(out[-1], gap=gap, respace=True)
-        if correction:
+        if end == start and correction == (HYPHEN,):
+            # Tokenized sets write a hyphen as its own token, so an inserted one joins the
+            # words on both sides: "larger than life" becomes "larger-than-life".
+            if out:
+                out[-1] = replace(out[-1], gap="", respace=False)
+            out.append(Piece(HYPHEN, "", HYPHEN))
+        elif correction:
             gap = published[end - 1].gap if end > start else " "
             out.append(Piece(detokenize(correction), gap, correction[0], respace=True))
         position = end

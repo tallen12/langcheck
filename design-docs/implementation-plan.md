@@ -692,12 +692,19 @@ in this order: steps 2 to 6 depend on each other, 7 and 8 stand alone, 9 needs 1
    OpenAI-compatible API, with reasoning off by default: with it on, the first 100
    CWEB-G dev sentences took about 25 minutes per judge, which puts a full set at days.
    `--think` turns it on; those verdicts are stored under `+think` judges, apart. Of the
-   models there, the default panel is three general instruction models from different
-   families: `qwen3:14b`, `gemma4:12b-it-q4_K_M` and `llama3.1:latest`
-   (8B). `qwen3.5:9b-q8_0` stands in for a member that shares a family with the
-   corrector being measured, such as `gemma4` while it is the configured LLM. Coding
-   models and the grammar fine-tunes on the server (`karen-editor`,
-   `mistral-grammar-checker`) are correctors, not judges, and are left out. Judges this
+   models there, the default panel is `qwen3:14b`, `gemma4:12b-it-q4_K_M` and
+   `qwen3.5:9b-q8_0`. The third seat was first `llama3.1:latest` (8B), the only other
+   family; on the first 100 CWEB-G dev sentences it called most edits neutral with
+   one-word reasons and matched the other two judges where they agreed only 17% of the
+   time, against 79% for `qwen3.5`, which gave a real reason for every verdict.
+   `deepseek-r1:8b` matched 91% but by calling nearly everything valid with one-word
+   reasons, and failed 28 sentences that had no corrections by rating edits that were not
+   there. So two judges share the qwen family; family diversity gave way to quality.
+   `deepseek-r1:8b` stands in for a member that shares a family with the corrector being
+   measured, such as `gemma4` while it is the configured LLM; a qwen corrector cannot be
+   measured with this panel. Coding models and the grammar fine-tunes on the server
+   (`karen-editor`, `mistral-grammar-checker`) are correctors, not judges, and are left
+   out. Judges this
    small disagree more than large hosted ones, so the audit in step 6 decides whether the
    panel is good enough or needs a stronger member.
 
@@ -735,6 +742,15 @@ in this order: steps 2 to 6 depend on each other, 7 and 8 stand alone, 9 needs 1
      that fixes it best, a tie, or none. Per-edit verdicts are kept, so a checker that
      makes either of two valid fixes is not penalized; the preference picks which
      correction a clean set uses as its main reference.
+
+   On the first 100 CWEB-G dev sentences, `judge-v2` cut gold edits judged wrong from 18
+   to 5 and sentences with an error left from 16 to 10, and found 8 of 62 gold edits
+   linked. *Prompt `judge-v3`* fixes what was left: an edit shared by two corrections is
+   listed in full once (judges rated it once per correction, and the repeated number
+   failed the reply; repeats that agree are now merged), and an inserted hyphen joins the
+   words on both sides ("larger-than-life", not "larger - than - life"). Reasons are
+   capped at 200 characters in the reply schema and requests at 1,024 tokens, since
+   `llama3.1` sometimes repeated a reason until the proxy timed out.
 4. **Clean sets.** Rewrite a set from the consensus: keep gold edits judged valid, drop
    those judged neutral or wrong, and add edits from any run judged valid that overlap no
    kept edit. A sentence the panel says still has an error that no pooled edit fixes, or

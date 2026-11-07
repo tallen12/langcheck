@@ -22,7 +22,7 @@ def test_without_a_corrector_the_panel_is_kept() -> None:
 def test_the_correctors_family_gives_way_to_the_standby() -> None:
     panel = choose_panel(DEFAULT_PANEL, corrector="gemma4:12b-it-q4_K_M")
 
-    assert panel == ("qwen3:14b", DEFAULT_STANDBY, "llama3.1:latest")
+    assert panel == ("qwen3:14b", DEFAULT_STANDBY, "qwen3.5:9b-q8_0")
     assert choose_panel(DEFAULT_PANEL, corrector="mistral:7b") == DEFAULT_PANEL
 
 

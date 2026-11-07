@@ -79,6 +79,30 @@ def test_each_correction_is_shown_whole_in_the_published_spelling_with_its_edits
     ]
 
 
+def test_an_edit_shared_by_two_corrections_is_listed_in_full_once() -> None:
+    item = pool_item(TOKENS, gold=[(GOES, MOVE_OUT, MOVE_IN), (GOES,)], written=WRITTEN)
+
+    _, user = judge_messages(item)
+
+    assert user.content.splitlines()[-2:] == [
+        "B (annotator 2): A build-up often goes bad.",
+        "   2. (same edit as in A)",
+    ]
+
+
+def test_repeated_verdicts_that_agree_are_merged_and_ones_that_differ_are_not() -> None:
+    four = [(n, "valid") for n in range(1, 5)]
+    agreeing = reply(*four, (4, "valid", [1]))
+    differing = reply(*four, (4, "wrong"))
+
+    merged = asyncio.run(LLMEditJudge(ScriptedLLM([agreeing]), "m").judge(ITEM))
+    split = asyncio.run(LLMEditJudge(ScriptedLLM([differing]), "m").judge(ITEM))
+
+    assert isinstance(merged, Judged)
+    assert merged.verdicts[3] == EditVerdict(Verdict.VALID, "because", (0,))
+    assert split == NotJudged("edit 4 rated valid and wrong")
+
+
 def test_edits_are_described_as_replacements_insertions_and_deletions() -> None:
     item = pool_item(TOKENS, gold=[(ScoredEdit(0, 0, ("So",), None),)])
 
@@ -150,8 +174,8 @@ def test_judges_that_reason_are_stored_apart() -> None:
     assert judge.name == f"llm:qwen3:14b@{JUDGE_PROMPT_VERSION}+think"
 
 
-def test_a_reply_that_misnumbers_edits_or_names_no_correction_is_not_judged() -> None:
-    misnumbered = LLMEditJudge(ScriptedLLM([reply((1, "valid"), (1, "wrong"))]), "m")
+def test_a_reply_that_misses_edits_or_names_no_correction_is_not_judged() -> None:
+    misnumbered = LLMEditJudge(ScriptedLLM([reply((1, "valid"), (2, "wrong"))]), "m")
     unknown = LLMEditJudge(
         ScriptedLLM([reply(*[(n, "valid") for n in range(1, 5)], preferred="C")]), "m"
     )

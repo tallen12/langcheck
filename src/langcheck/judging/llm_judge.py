@@ -14,6 +14,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from langcheck.judging.models import (
     Candidate,
+    EditKey,
     EditVerdict,
     Item,
     Judged,
@@ -30,7 +31,7 @@ from langcheck.llm.models import ChatMessage, ChatOptions, Role
 from langcheck.llm.protocols import AsyncLLMClient
 from langcheck.llm.structured import Failed, Parsed, complete_structured
 
-JUDGE_PROMPT_VERSION = "judge-v2"
+JUDGE_PROMPT_VERSION = "judge-v3"
 LLM_JUDGE_PREFIX = "llm"
 THINK_SUFFIX = "+think"
 TIE = "tie"
@@ -48,8 +49,8 @@ THINKING_TOKENS = 8192
 SYSTEM_PROMPT = """You judge corrections of English sentences written by learners and \
 by fluent writers. Each correction (A, B, ...) is one person's whole rewrite of the \
 sentence, with its edits numbered below it; an edit shared by two corrections has one \
-number. Judge each edit as part of its correction, with that correction's other edits \
-applied:
+number and is listed in full only the first time. Rate each number exactly once. Judge \
+each edit as part of its correction, with that correction's other edits applied:
 
 - "valid": the original has a real error (grammar, spelling, punctuation, word choice, \
 agreement, a missing or extra word) and the edit fixes it without changing the meaning.
@@ -147,12 +148,17 @@ def judge_messages(item: Item) -> list[ChatMessage]:
     lines += [f"Original: {render(item.tokens, [], item.written)}", ""]
     if not item.versions:
         lines.append('Corrections: none. Reply with an empty edits list and "none" preferred.')
+    shown: dict[EditKey, str] = {}
     for letter, version in zip(LETTERS, item.versions, strict=False):
         lines.append(
             f"{letter} ({version.label}): {render(item.tokens, version.edits, item.written)}"
         )
         for key in version.edits:
-            lines.append(f"   {numbers[key]}. {describe_edit(item, by_key[key])}")
+            if key in shown:
+                lines.append(f"   {numbers[key]}. (same edit as in {shown[key]})")
+            else:
+                lines.append(f"   {numbers[key]}. {describe_edit(item, by_key[key])}")
+                shown[key] = letter
     return [ChatMessage(Role.SYSTEM, SYSTEM_PROMPT), ChatMessage(Role.USER, "\n".join(lines))]
 
 
@@ -170,14 +176,24 @@ def describe_edit(item: Item, candidate: Candidate) -> str:
 
 
 def judged(reply: JudgeReply, item: Item) -> JudgeResult:
-    """``reply`` as verdicts in candidate order; ``NotJudged`` unless it rates each edit
-    exactly once, since a verdict given to the wrong number would be stored on the wrong
-    edit, and names a correction that exists. Links to edits outside the edit's own
-    corrections are dropped.
+    """``reply`` as verdicts in candidate order; ``NotJudged`` unless it rates every edit,
+    rates none twice with different verdicts and names a correction that exists. A verdict
+    given to the wrong number would be stored on the wrong edit. Repeats that agree are
+    merged, links included: a judge sometimes rates a shared edit once per correction.
+    Links to edits outside the edit's own corrections are dropped.
     """
     count = len(item.candidates)
-    by_number = {verdict.edit: verdict for verdict in reply.edits}
-    if len(by_number) != len(reply.edits) or set(by_number) != set(range(1, count + 1)):
+    by_number: dict[int, _EditReply] = {}
+    for verdict in reply.edits:
+        earlier = by_number.get(verdict.edit)
+        if earlier is None:
+            by_number[verdict.edit] = verdict
+        elif earlier.verdict is verdict.verdict:
+            linked = tuple(sorted({*earlier.linked, *verdict.linked}))
+            by_number[verdict.edit] = earlier.model_copy(update={"linked": linked})
+        else:
+            return NotJudged(f"edit {verdict.edit} rated {earlier.verdict} and {verdict.verdict}")
+    if set(by_number) != set(range(1, count + 1)):
         numbers = sorted(verdict.edit for verdict in reply.edits)
         return NotJudged(f"expected verdicts on edits 1 to {count}, got {numbers}")
     preference = _preference(reply, len(item.versions))

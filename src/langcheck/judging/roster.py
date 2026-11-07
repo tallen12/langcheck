@@ -7,8 +7,13 @@ a standby from another family.
 import re
 from collections.abc import Sequence
 
-DEFAULT_PANEL = ("qwen3:14b", "gemma4:12b-it-q4_K_M", "llama3.1:latest")
-DEFAULT_STANDBY = "qwen3.5:9b-q8_0"
+DEFAULT_PANEL = ("qwen3:14b", "gemma4:12b-it-q4_K_M", "qwen3.5:9b-q8_0")
+"""Chosen on the first 100 CWEB-G dev sentences: qwen3.5 matched the other two where they
+agreed 79% of the time with a real reason for every verdict; llama3.1 matched 17%, mostly
+calling edits neutral with one-word reasons."""
+DEFAULT_STANDBY = "deepseek-r1:8b"
+"""The only other family on the server; it rubber-stamps edits and fails on sentences
+without corrections, so results that need it are weaker."""
 
 _FAMILY = re.compile(r"[a-z]+")
 
