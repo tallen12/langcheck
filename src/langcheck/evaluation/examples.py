@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict
 
 from langcheck.evaluation.datasets import SOURCES, Dataset, DatasetError, Format
 from langcheck.evaluation.detokenize import detokenize
-from langcheck.evaluation.m2 import read_m2
+from langcheck.evaluation.m2 import AnnotatedSentence, read_m2
 from langcheck.evaluation.models import ScoredEdit
 from langcheck.evaluation.protocols import EditAnnotator
 
@@ -67,6 +67,20 @@ def checked_text(source: Sequence[str], annotator: EditAnnotator) -> str:
     return text if annotator.tokenize(text) == list(source) else " ".join(source)
 
 
+def annotated_examples(
+    sentences: Sequence[AnnotatedSentence], annotator: EditAnnotator
+) -> list[Example]:
+    """``sentences`` with their gold edits typed, as the checker is given them."""
+    return [
+        Example(
+            s.tokens,
+            tuple(tuple(annotator.gold_edits(s.tokens, edits)) for edits in s.annotators),
+            checked_text(s.tokens, annotator),
+        )
+        for s in sentences
+    ]
+
+
 def load_examples(
     dataset: Dataset,
     files: Sequence[Path],
@@ -79,14 +93,7 @@ def load_examples(
     match source.format:
         case Format.M2:
             sentences = read_m2(files[0].read_text(encoding="utf-8"))[:limit]
-            return [
-                Example(
-                    s.tokens,
-                    tuple(tuple(annotator.gold_edits(s.tokens, edits)) for edits in s.annotators),
-                    checked_text(s.tokens, annotator),
-                )
-                for s in sentences
-            ]
+            return annotated_examples(sentences, annotator)
         case Format.REFERENCES:
             sources, *references = [_lines(path) for path in files]
             if any(len(lines) != len(sources) for lines in references):

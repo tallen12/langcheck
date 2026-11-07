@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Protocol, assert_never
+from typing import Annotated, Protocol, assert_never
 
 from cyclopts import App, Parameter
 
@@ -13,15 +13,8 @@ from langcheck.evaluation.context_pairs import read_pairs
 from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.examples import load_examples
 from langcheck.evaluation.m2 import AnnotatedSentence, read_m2
-from langcheck.synthesis.clean_text import clean_sentences, read_texts
-from langcheck.synthesis.corruption import (
-    clean_versions,
-    corrected_copies,
-    corrupt_in_context,
-    known_clean,
-    synthesize,
-    table_sets,
-)
+from langcheck.synthesis.clean_text import read_texts
+from langcheck.synthesis.training_mix import TrainingMix
 from langcheck.tagging.alignment import preceding_text
 from langcheck.tagging.document import flag_text
 from langcheck.tagging.loaded import Trained, load_trained, torch_limit
@@ -34,12 +27,11 @@ from langcheck.tagging.tiers import Adjacent, Falloff, FlagKind, Growth, TextFla
 CLEAN = 0
 FAILED = 2
 DEFAULT_DATA = Path("data") / "eval"
-DEFAULT_TRAINING_SETS = (Dataset.BEA19_TRAIN, Dataset.FCE_TRAIN)
 DEFAULT_MODEL = "roberta-large"
 
 DEFAULT_POLICY = TierPolicy()
-LEARNER_SOURCE = "learner"
-"""How the held-out learner sentences are named among a mix of validation sets."""
+HELD_SOURCE = "held-out"
+"""How the held-out share of the training mix is named among the validation sets."""
 PAIRS_SUFFIX = ".jsonl"
 
 type Guard = Callable[[Callable[[], int]], int]
@@ -81,92 +73,11 @@ class Activations(StrEnum):
     less memory (DeBERTa-v3-large needs it at 16 GB) for about a third more time."""
 
 
-class TaggerTrainingError(Exception):
-    """There are too few sentences to train on and choose a threshold with."""
-
-
-@dataclass(frozen=True, slots=True)
-class TrainingMix:
-    """What a tagger or its comma head trains on besides the held-out learner sentences:
-    the real ones (or not), ``synthetic`` corrupted copies of each, corrupted ``clean``
-    prose, ready ``pairs`` with their context, a second set of error ``tables`` and the
-    ``errors`` counts synthetic sentences draw from. With ``corrected``, each wrong
-    sentence's clean version is added too.
-    """
-
-    synthetic: int = 0
-    real: bool = True
-    corrected: bool = False
-    clean: tuple[str, ...] = ()
-    pairs: tuple[tuple[AnnotatedSentence, str], ...] = ()
-    tables: tuple[AnnotatedSentence, ...] = ()
-    errors: tuple[int, ...] = ()
-
-
-if TYPE_CHECKING:
-    from langcheck.tagging.training import InContext
-
-
-def assemble(
-    sentences: Sequence[AnnotatedSentence], mix: TrainingMix, *, context_sentences: int
-) -> tuple[list[InContext], list[InContext]]:
-    """The training sentences ``mix`` names, and the held-out learner sentences."""
-    from langcheck.tagging.training import InContext, split_holdout
-
-    contexts = preceding_text([s.tokens for s in sentences], context_sentences)
-    items = [InContext(s, c) for s, c in zip(sentences, contexts, strict=True)]
-    training, held = split_holdout(items)
-    if not held:
-        msg = f"{len(sentences)} sentences leave none for validation; use more"
-        raise TaggerTrainingError(msg)
-    real_training = list(training)
-    if not mix.real:
-        if not mix.synthetic and not mix.clean and not mix.pairs:
-            msg = "without the real sentences, train on --synthetic, --clean or --pairs ones"
-            raise TaggerTrainingError(msg)
-        training = []
-    if mix.corrected and mix.real:
-        fixed, _ = split_holdout(corrected_copies(sentences, context_sentences=context_sentences))
-        training += [InContext(*pair) for pair in fixed if pair is not None]
-    corruption = table_sets(
-        [[item.sentence for item in real_training], mix.tables], error_counts=mix.errors
-    )
-    if mix.synthetic:
-        made = synthesize(
-            [item.sentence for item in real_training], corruption, copies=mix.synthetic
-        )
-        training += [InContext(s, real_training[i].context) for i, s in made]
-        if mix.corrected and not mix.real:
-            # Without the real sentences, the clean version of each synthetic one is
-            # missing too, even where the writer made no error.
-            versions, _ = split_holdout(
-                clean_versions(sentences, context_sentences=context_sentences)
-            )
-            sources = sorted({i for i, _ in made})
-            training += [InContext(*pair) for i in sources if (pair := versions[i])]
-    if mix.clean:
-        found = list(clean_sentences(mix.clean, context_sentences=context_sentences))
-        made_clean = corrupt_in_context([(c.words, c.context) for c in found], corruption)
-        training += [InContext(*pair) for pair in made_clean]
-        if mix.corrected:
-            training += [InContext(AnnotatedSentence(c.words, ((),)), c.context) for c in found]
-    if mix.pairs:
-        training += [InContext(*pair) for pair in mix.pairs]
-        if mix.corrected:
-            training += [
-                InContext(AnnotatedSentence(fixed, ((),)), context)
-                for sentence, context in mix.pairs
-                if (fixed := known_clean(sentence)) is not None
-            ]
-    return training, held
-
-
 class TaggerRuntime(Protocol):
     """Training and loading, which need PyTorch, kept away from the commands."""
 
     def train(
         self,
-        sentences: Sequence[AnnotatedSentence],
         *,
         start: Start,
         output: Path,
@@ -183,7 +94,7 @@ class TaggerRuntime(Protocol):
         device: str,
         log: Callable[[str], None],
     ) -> None:
-        """Fine-tune the tagger ``start`` names on ``sentences``; save it to ``output``."""
+        """Fine-tune the tagger ``start`` names on what ``mix`` names; save it to ``output``."""
         ...
 
     def load(self, path: Path, *, device: str) -> Trained:
@@ -193,7 +104,6 @@ class TaggerRuntime(Protocol):
     def train_commas(
         self,
         path: Path,
-        sentences: Sequence[AnnotatedSentence],
         *,
         mix: TrainingMix,
         device: str,
@@ -208,7 +118,6 @@ class TransformerRuntime:
 
     def train(
         self,
-        sentences: Sequence[AnnotatedSentence],
         *,
         start: Start,
         output: Path,
@@ -225,10 +134,11 @@ class TransformerRuntime:
         device: str,
         log: Callable[[str], None],
     ) -> None:
-        """Fine-tune the tagger ``start`` names on ``sentences``; save it to ``output``."""
+        """Fine-tune the tagger ``start`` names on what ``mix`` names; save it to ``output``."""
         import torch
         from transformers import AutoModel
 
+        from langcheck.synthesis.training_mix import assemble
         from langcheck.tagging.checkpoint import CheckpointInfo, load_checkpoint, save_checkpoint
         from langcheck.tagging.encoding import load_tokenizer
         from langcheck.tagging.model import SlotTagger
@@ -266,8 +176,9 @@ class TransformerRuntime:
                 tagger.encoder.gradient_checkpointing_enable()
             case _:
                 assert_never(activations)
-        training, held = assemble(sentences, mix, context_sentences=context_sentences)
-        validation = [InContext(i.sentence, i.context, LEARNER_SOURCE) for i in held]
+        pairs, held = assemble(mix, context_sentences=context_sentences)
+        training = [InContext(s, c) for s, c in pairs]
+        validation = [InContext(s, c, HELD_SOURCE) for s, c in held]
         for source, found in validate_on.items():
             validation += [InContext(s, c, source) for s, c in found]
         log(f"{len(training)} training sentences, {len(validation)} validation sentences")
@@ -297,7 +208,6 @@ class TransformerRuntime:
     def train_commas(
         self,
         path: Path,
-        sentences: Sequence[AnnotatedSentence],
         *,
         mix: TrainingMix,
         device: str,
@@ -306,13 +216,16 @@ class TransformerRuntime:
         """Add a comma head, fitted on what ``mix`` names, to the checkpoint at ``path``."""
         import torch
 
+        from langcheck.synthesis.training_mix import assemble
         from langcheck.tagging.checkpoint import load_checkpoint
         from langcheck.tagging.comma import save_comma_head, train_comma_head
+        from langcheck.tagging.training import InContext
 
         target = torch.device(device)
         torch_limit(target)
         loaded = load_checkpoint(path, device=target)
-        training, _ = assemble(sentences, mix, context_sentences=loaded.info.context_sentences)
+        pairs, _ = assemble(mix, context_sentences=loaded.info.context_sentences)
+        training = [InContext(s, c) for s, c in pairs]
         log(f"fitting the comma head on {len(training)} sentences")
         head = train_comma_head(
             loaded.tagger,
@@ -348,16 +261,6 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
     type ErrorOption = Annotated[float, Parameter(help="Score where the error tier begins.")]
     type SuggestionOption = Annotated[float, Parameter(help="Lowest score shown at all.")]
 
-    type SyntheticOption = Annotated[
-        int, Parameter(help="Corrupted copies of each corrected training sentence to add.")
-    ]
-    type RealOption = Annotated[
-        bool,
-        Parameter(
-            help="Train on the real learner sentences; --no-real trains on --synthetic, "
-            "--clean and --pairs ones alone, still validated on real ones."
-        ),
-    ]
     type CorrectedOption = Annotated[
         bool,
         Parameter(
@@ -366,7 +269,8 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
         ),
     ]
     type CleanOption = Annotated[
-        Path | None, Parameter(help="JSONL of edited prose to corrupt and add, one per text.")
+        Path | None,
+        Parameter(help="JSONL of edited prose to corrupt with the error tables, one per text."),
     ]
     type PairsOption = Annotated[
         list[Path] | None,
@@ -379,15 +283,15 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
         list[Path] | None,
         Parameter(
             help="Pairs (M2 or JSONL) to learn a second set of error tables from; each "
-            "--synthetic or --clean sentence takes the learner set or this one at random. "
-            "Repeatable."
+            "--clean sentence takes the built-in tables or these at random. Repeatable."
         ),
     ]
     type ErrorsOption = Annotated[
         list[int] | None,
         Parameter(
-            help="Error counts to draw each --synthetic or --clean sentence's from, such "
-            "as 0 1 2 3 for a quarter each; default as the tables' source shows.",
+            help="Error counts to draw each --clean sentence's from, such as 0 1 2 3 for a "
+            "quarter each; default 0 1 2 3 for the built-in tables, as the pairs show for "
+            "--tables.",
             consume_multiple=True,
         ),
     ]
@@ -397,8 +301,6 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
 
     def read_mix(
         *,
-        synthetic: int,
-        real: bool,
         corrected: bool,
         clean: Path | None,
         pairs: list[Path] | None,
@@ -409,26 +311,16 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
         if any(count < 0 for count in errors or ()):
             env.err("langcheck: --errors takes counts of 0 or more")
             return None
+        if clean is None and pairs is None:
+            env.err("langcheck: train on --clean prose or --pairs")
+            return None
         return TrainingMix(
-            synthetic=synthetic,
-            real=real,
             corrected=corrected,
             clean=tuple(read_texts(clean)) if clean is not None else (),
             pairs=tuple(pair for path in pairs or () for pair in read_pair_file(path)),
             tables=tuple(s for path in tables or () for s, _ in read_pair_file(path)),
             errors=tuple(errors or ()),
         )
-
-    def training_sentences(data: Path | None) -> list[AnnotatedSentence] | None:
-        """The default training sets' sentences; None, said why, when one is missing."""
-        sentences: list[AnnotatedSentence] = []
-        for dataset in DEFAULT_TRAINING_SETS:
-            [path] = dataset_files(dataset, data_dir(data))
-            if not path.is_file():
-                env.err(f"langcheck: run `langcheck evaluate fetch {dataset.value}` first")
-                return None
-            sentences += read_m2(path.read_text(encoding="utf-8"))
-        return sentences
 
     @app.command(name="train")
     def train_command(
@@ -462,10 +354,7 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
             Parameter(help="With --flags-from, grow flags by a falloff from this score."),
         ] = None,
         rate: Annotated[float, Parameter(help="How fast the bar for --join rises.")] = 2.0,
-        limit: Annotated[int | None, Parameter(help="Only the first N sentences.")] = None,
         context: Annotated[int, Parameter(help="Preceding sentences to read.")] = 0,
-        synthetic: SyntheticOption = 0,
-        real: RealOption = True,
         corrected: CorrectedOption = False,
         clean: CleanOption = None,
         pairs: PairsOption = None,
@@ -474,14 +363,16 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
         validate_on: Annotated[
             list[Path] | None,
             Parameter(
-                help="Pairs (M2 or JSONL) to validate on as well as the held-out learner "
-                "sentences; epochs are judged on the mix, each set also reported. Repeatable."
+                help="Pairs (M2 or JSONL), such as realistic errors, to validate on as well as "
+                "the held-out share of the training mix; epochs are judged on all of them, "
+                "each set also reported. Repeatable."
             ),
         ] = None,
         device: DeviceOption = "cuda",
-        data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
     ) -> int:
-        """Fine-tune on the BEA-2019 W&I+LOCNESS and FCE training sets; save to OUTPUT."""
+        """Fine-tune on --clean prose, corrupted with error tables, and on --pairs; save to
+        OUTPUT. Evaluation sets are never trained on.
+        """
         growth: Growth = Adjacent() if join is None else Falloff(join=join, rate=rate)
         choice: EpochChoice = (
             BySlots()
@@ -497,19 +388,15 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
 
         def run() -> int:
             mix = read_mix(
-                synthetic=synthetic,
-                real=real,
                 corrected=corrected,
                 clean=clean,
                 pairs=pairs,
                 tables=tables,
                 errors=errors,
             )
-            sentences = training_sentences(data)
-            if mix is None or sentences is None:
+            if mix is None:
                 return FAILED
             runtime.train(
-                sentences[:limit],
                 start=Pretrained(model) if start_from is None else Continued(start_from),
                 output=output,
                 epochs=epochs,
@@ -577,15 +464,12 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
         checkpoint: Path,
         /,
         *,
-        synthetic: SyntheticOption = 0,
-        real: RealOption = True,
         corrected: CorrectedOption = False,
         clean: CleanOption = None,
         pairs: PairsOption = None,
         tables: TablesOption = None,
         errors: ErrorsOption = None,
         device: DeviceOption = "cuda",
-        data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
     ) -> int:
         """Add a head to CHECKPOINT that tells missing commas from other missing words,
         fitted on the same kinds of training data as the tagger.
@@ -593,18 +477,15 @@ def tagger_app(env: CliEnvironment, *, runtime: TaggerRuntime, guarded: Guard) -
 
         def run() -> int:
             mix = read_mix(
-                synthetic=synthetic,
-                real=real,
                 corrected=corrected,
                 clean=clean,
                 pairs=pairs,
                 tables=tables,
                 errors=errors,
             )
-            sentences = training_sentences(data)
-            if mix is None or sentences is None:
+            if mix is None:
                 return FAILED
-            runtime.train_commas(checkpoint, sentences, mix=mix, device=device, log=env.out)
+            runtime.train_commas(checkpoint, mix=mix, device=device, log=env.out)
             env.out(f"saved: {checkpoint}")
             return CLEAN
 

@@ -564,8 +564,14 @@ these) and scores it with ERRANT span-level F0.5, per kind. Use it to compare mo
 prompts, set `ScoringPolicy` per kind, measure how many LLM edits validation rejects,
 and record latency per chunk. Compare against contcheck's tagger on the same sets.
 
-As built: `langcheck evaluate fetch` downloads BEA-2019 dev, CoNLL-2014 test (M2) or
-JFLEG dev (references) once into `data/eval/`. `evaluate run` checks every sentence as
+As built: `langcheck evaluate fetch` downloads BEA-2019 dev, CoNLL-2014 test, CWEB
+(general and sponsored web pages, dev and test; M2) or JFLEG dev (references) once into
+`data/eval/`. These sets are for evaluation only: their licences allow research or
+non-commercial use, so nothing that ships (a model, a gate, tuned weights) is trained or
+fitted on them. Training reads only `--clean` prose, `--pairs` and `--tables` files passed
+to it, and corrupts prose with built-in error tables written by hand
+(`synthesis.default_tables`). CWEB comes from fluent writers, with few errors per sentence,
+which is closer to this checker's users than the learner essays of BEA-2019. `evaluate run` checks every sentence as
 its own text with an empty context (one chunk per check, so the timing is chunk
 latency), applies each suggestion's best option, extracts the edits with ERRANT
 (`eval` extra) and scores them against each sentence's best annotator, per kind through
@@ -692,13 +698,17 @@ second feature that lands after it.
   gain -52 against -116: it hurts less but finds less. The gate was fitted on other
   sentences of both sets. On CPU it took 2.1 s at p50 and 5.5 s at p90 per flagged sentence,
   before the gate.
-- **Training on corrupted text.** `--synthetic` inverts gold edits at their real rates and
-  `--clean` corrupts known-clean text the same way. A proposer trained with both, on the
-  same tagger and without refitting the gate, moves F0.5 from 0.471 to 0.503 on the first 500
-  `bea19-dev` sentences, 0.286 to 0.380 on 500 WikEd sentences and 0.545 to 0.587 on JFLEG
-  dev. A tagger trained with both is no better: at matching precision its recall is the same
-  or slightly lower. Refitting the gate and more epochs are untried; the last epoch was the
-  best.
+- **Training on corrupted text.** Training now uses only corrupted `--clean` prose and
+  `--pairs` passed in, with built-in error tables and optional learned `--tables`. The
+  earlier `--synthetic` (gold edits of BEA-2019 and FCE training sets inverted at their real
+  rates) and `--no-real` are gone with those sets. With `--synthetic` and `--clean`, a
+  proposer on the same tagger, without refitting the gate, moved F0.5 from 0.471 to 0.503 on
+  the first 500 `bea19-dev` sentences, 0.286 to 0.380 on 500 WikEd sentences and 0.545 to
+  0.587 on JFLEG dev; a tagger trained with both was no better. Models trained only on the
+  built-in tables are not measured yet. The `AbstainGate` weights, `proposer train`'s epoch
+  scoring and `proposer measure`'s tuning were fitted on `bea19-dev`; scoring and tuning
+  now take a pairs file (`--score-with`, `--tune-on`), and the gate still needs refitting
+  on data that is not an evaluation set.
 - **Larger context.** Context is two previous sentences of plain text in the encoder's input,
   capped at 256 tokens. A separate, larger context feature might help; nothing is measured.
 - **Scaling past one process.** Redis or SQL adapters for `DocumentStore` and

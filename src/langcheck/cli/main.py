@@ -31,7 +31,7 @@ from langcheck.cli.noising import TransformerNoiseRuntime, noise_app
 from langcheck.cli.proposing import TransformerProposerRuntime, proposer_app
 from langcheck.cli.render import render_check, render_context
 from langcheck.cli.suggesting import suggest_app
-from langcheck.cli.tagging import TaggerTrainingError, TransformerRuntime, tagger_app
+from langcheck.cli.tagging import TransformerRuntime, tagger_app
 from langcheck.cli.watching import watch_file
 from langcheck.database.schema import open_database
 from langcheck.evaluation.datasets import DatasetError
@@ -50,6 +50,7 @@ from langcheck.settings.loading import (
     read_yaml,
     resolve_config_path,
 )
+from langcheck.synthesis.training_mix import TrainingMixError
 
 CLEAN = 0
 FOUND = 1
@@ -75,7 +76,7 @@ _EXPECTED_FAILURES = (
     ScorerUnavailableError,
     DatasetError,
     M2Error,
-    TaggerTrainingError,
+    TrainingMixError,
     httpx.HTTPError,
     OSError,
 )

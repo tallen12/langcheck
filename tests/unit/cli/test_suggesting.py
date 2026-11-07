@@ -13,11 +13,12 @@ from langcheck.cli.suggesting import (
     render_rejected,
     suggest_app,
 )
-from langcheck.cli.tagging import Activations, Start, Trained, TrainingMix
+from langcheck.cli.tagging import Activations, Start, Trained
 from langcheck.correction.models import Corrected, Rejected, RejectionReason, Unavailable
 from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.m2 import AnnotatedSentence
 from langcheck.settings.loading import ClientSettings, load_settings
+from langcheck.synthesis.training_mix import TrainingMix
 from langcheck.tagging.alignment import CharSpan
 from langcheck.tagging.selection import EpochChoice
 from langcheck.tagging.tiers import FlagKind, TextFlag, Tier
@@ -30,7 +31,6 @@ FLAG = TextFlag(CharSpan(3, 5), 0.9, Tier.ERROR, FlagKind.GENERAL)
 class WordTableRuntime:
     def train(
         self,
-        sentences: Sequence[AnnotatedSentence],
         *,
         start: Start,
         output: Path,
@@ -55,7 +55,6 @@ class WordTableRuntime:
     def train_commas(
         self,
         path: Path,
-        sentences: Sequence[AnnotatedSentence],
         *,
         mix: TrainingMix,
         device: str,

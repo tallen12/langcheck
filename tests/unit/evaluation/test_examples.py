@@ -6,8 +6,14 @@ import pytest
 from pydantic import ValidationError
 
 from langcheck.evaluation.datasets import Dataset, DatasetError
-from langcheck.evaluation.examples import Example, checked_text, load_corrected_pairs, load_examples
-from langcheck.evaluation.m2 import GoldEdit
+from langcheck.evaluation.examples import (
+    Example,
+    annotated_examples,
+    checked_text,
+    load_corrected_pairs,
+    load_examples,
+)
+from langcheck.evaluation.m2 import GoldEdit, read_m2
 from langcheck.evaluation.models import ScoredEdit
 from tests.conftest import TokenDiffAnnotator
 
@@ -31,6 +37,14 @@ def test_loads_m2_sentences_with_their_annotators(tmp_path: Path) -> None:
         Example(("Fine", "."), ((),), "Fine ."),
     ]
     assert examples[0].tokenized
+
+
+def test_annotated_sentences_from_any_file_become_examples() -> None:
+    examples = annotated_examples(read_m2(M2)[:1], TokenDiffAnnotator())
+
+    assert examples == [
+        Example(("He", "go", "home", "."), ((ScoredEdit(1, 2, ("goes",), None),),), "He go home .")
+    ]
 
 
 class PunctuationTokens:

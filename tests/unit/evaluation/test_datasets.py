@@ -96,7 +96,16 @@ def test_http_downloader_streams_to_the_destination(tmp_path: Path) -> None:
     assert not (tmp_path / "missing").exists()
 
 
-def test_the_training_sets_read_one_m2_file_each() -> None:
-    for dataset in (Dataset.BEA19_TRAIN, Dataset.FCE_TRAIN):
+def test_the_cweb_sets_read_their_combined_m2_file_from_one_archive() -> None:
+    expected = {
+        Dataset.CWEB_G_DEV: "CWEB-G.dev.m2",
+        Dataset.CWEB_S_DEV: "CWEB-S.dev.m2",
+        Dataset.CWEB_G_TEST: "CWEB-G.test.m2",
+        Dataset.CWEB_S_TEST: "CWEB-S.test.m2",
+    }
+
+    assert len({SOURCES[dataset].url for dataset in expected}) == 1
+    for dataset, name in expected.items():
+        [member] = SOURCES[dataset].members
         assert SOURCES[dataset].format is Format.M2
-        assert len(SOURCES[dataset].members) == 1
+        assert member == f"CWEB-master/data/m2/{name}"
