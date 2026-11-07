@@ -678,8 +678,10 @@ in this order: steps 2 to 6 depend on each other, 7 and 8 stand alone, 9 needs 1
    never committed: CWEB's ShareAlike licence covers anything derived from it.
 3. **A panel of LLM judges.** An `EditJudge` protocol with an adapter on the
    OpenAI-compatible client; a panel holds several judges, each a different model, ideally
-   from different families. Each judge sees the sentence, its context and one edit, and
-   answers in a schema. An edit's consensus is the verdict most judges give, at a quorum
+   from different families. Each judge gets one request per sentence: the sentence, its
+   context and every pooled edit, each shown applied alone, and answers in a schema with a
+   verdict per edit. One request per sentence instead of per edit cuts the calls several
+   times over, and the same answer says whether an error is left. An edit's consensus is the verdict most judges give, at a quorum
    set per run (two of three by default); an edit below quorum is *disputed* and has no
    consensus until a person decides it. None of the judges may share a family with the
    corrector being measured, or the LLM corrector is favoured over the local proposer.
@@ -696,6 +698,17 @@ in this order: steps 2 to 6 depend on each other, 7 and 8 stand alone, 9 needs 1
    `mistral-grammar-checker`) are correctors, not judges, and are left out. Judges this
    small disagree more than large hosted ones, so the audit in step 6 decides whether the
    panel is good enough or needs a stronger member.
+
+   *As built (steps 2 and 3):* `langcheck judge run SET` pools the set's gold edits with
+   the edits of any `--corrections` files (JSONL of `text` and `corrected`), runs the
+   judges one model after another so the server loads each once, and appends every answer
+   to `data/judgments/<set>/judgments.jsonl` as it arrives. Judges are stored as
+   `llm:<model>@judge-v1`, so a new prompt version judges again. `--corrector MODEL`
+   swaps a judge of that model's family for `--standby`. `langcheck judge show SET` prints
+   the consensus from the store without judging: edits by source and verdict, disputed
+   and pending counts, sentences with an error left, each judge's verdicts and how often
+   each pair of judges agrees. Evaluate reports do not keep each sentence's edits, so a
+   run's edits reach the panel only through a corrections file for now.
 4. **Clean sets.** Rewrite a set from the consensus: keep gold edits judged valid, drop
    those judged neutral or wrong, and add edits from any run judged valid that overlap no
    kept edit. A sentence the panel says still has an error that no pooled edit fixes, or
@@ -747,7 +760,7 @@ depend on each other.
 | `feat/vscode` | M4 | Editor client. | LSP proxy (`langcheck lsp`); TypeScript extension in `editors/vscode/`, `just vscode` and its CI job |
 | `feat/libreoffice` | M5 | LibreOffice client. | Spike; UNO proofreader; import-rule check; `just libreoffice` and its CI job |
 | `feat/evaluation` | M6 | Measuring and tuning. | `evaluate` command with ERRANT scoring; `ScoringPolicy` tuning; model and prompt comparison |
-| `feat/realistic-eval` | M6 | Evaluation not bound to noisy gold. | CWEB and evaluation-only sets, gate loaded per proposer, `synth corrupt` (done); baseline; judgment store; judge panel and consensus; clean sets; judged scores; human audit; false alarms on clean prose; cross-noise gap; gate refit |
+| `feat/realistic-eval` | M6 | Evaluation not bound to noisy gold. | CWEB and evaluation-only sets, gate loaded per proposer, `synth corrupt`, judgment store, judge panel and consensus (done); baseline; clean sets; judged scores; human audit; false alarms on clean prose; cross-noise gap; gate refit |
 
 A feature that grows past the limit while being built is split at a task boundary into a
 second feature that lands after it.

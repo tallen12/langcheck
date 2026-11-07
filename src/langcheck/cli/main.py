@@ -27,6 +27,7 @@ from langcheck.auth.tokens import add_user
 from langcheck.cli.checking import ContextUnavailableError, open_local, open_remote
 from langcheck.cli.environment import CliEnvironment, process_environment
 from langcheck.cli.evaluating import evaluate_app
+from langcheck.cli.judging import judge_app
 from langcheck.cli.noising import TransformerNoiseRuntime, noise_app
 from langcheck.cli.proposing import TransformerProposerRuntime, proposer_app
 from langcheck.cli.render import render_check, render_context
@@ -38,6 +39,8 @@ from langcheck.database.schema import open_database
 from langcheck.evaluation.context_pairs import EvaluationDataError, PairsError
 from langcheck.evaluation.datasets import DatasetError
 from langcheck.evaluation.m2 import M2Error
+from langcheck.judging.roster import RosterError
+from langcheck.judging.store import JudgmentStoreError
 from langcheck.llm.models import LLMError
 from langcheck.lsp.models import Diagnostic
 from langcheck.lsp.proxy import LspProxy
@@ -81,6 +84,8 @@ _EXPECTED_FAILURES = (
     TrainingMixError,
     EvaluationDataError,
     PairsError,
+    RosterError,
+    JudgmentStoreError,
     httpx.HTTPError,
     OSError,
 )
@@ -138,6 +143,7 @@ def build_app(env: CliEnvironment) -> App:
     app.command(proposer_app(env, runtime=TransformerProposerRuntime(), guarded=guarded))
     app.command(noise_app(env, runtime=TransformerNoiseRuntime(), guarded=guarded))
     app.command(synth_app(env, guarded=guarded))
+    app.command(judge_app(env, settings=client_settings, guarded=guarded))
     app.command(
         suggest_app(env, runtime=TransformerRuntime(), settings=client_settings, guarded=guarded)
     )
