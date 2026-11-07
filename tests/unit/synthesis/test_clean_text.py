@@ -15,8 +15,16 @@ def test_unfinished_short_or_marked_up_text_does_not() -> None:
         "The cat sat on the mat",
         "Yes it is.",
         "The ((cat)) sat on it.",
+        "The cat ( ) sat on it.",
+        "The cat (born 1951 sat on it.",
+        "The cat born 1951) sat on it.",
     ):
         assert not looks_finished(text.split(), text)
+
+
+def test_a_plain_parenthetical_looks_finished() -> None:
+    text = "Reagan Louie (born 1951) is an American photographer (and artist)."
+    assert looks_finished(text.split(), text)
 
 
 def test_sentences_keep_what_came_before_them() -> None:

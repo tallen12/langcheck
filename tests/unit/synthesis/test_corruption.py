@@ -4,12 +4,15 @@ from collections import Counter
 from langcheck.evaluation.m2 import AnnotatedSentence, GoldEdit, corrected
 from langcheck.proposal.targets import UNCORRECTABLE
 from langcheck.synthesis.corruption import (
+    clean_versions,
+    corrected_copies,
     corrupt,
-    corrupt_all,
     corrupt_context,
+    corrupt_in_context,
     known_clean,
     learn_confusions,
     synthesize,
+    table_sets,
 )
 
 
@@ -98,19 +101,51 @@ def test_a_clean_sentence_can_stay_clean() -> None:
 
 def test_synthesize_makes_copies_and_names_their_source() -> None:
     real = [*repeated(PREPOSITION), annotated("a b", GoldEdit(0, 1, ("c",), UNCORRECTABLE))]
-    made = synthesize(real, copies=2)
+    made = synthesize(real, table_sets([real]), copies=2)
     assert [index for index, _ in made] == [0, 0, 1, 1]
 
 
 def test_synthesize_is_repeatable() -> None:
     real = [*repeated(PREPOSITION), *repeated(MISSING)]
-    assert synthesize(real, copies=3, seed=4) == synthesize(real, copies=3, seed=4)
+    tables = table_sets([real])
+    assert synthesize(real, tables, copies=3, seed=4) == synthesize(real, tables, copies=3, seed=4)
 
 
-def test_corrupt_all_corrupts_each_sentence_once() -> None:
-    confusions = learn_confusions(repeated(PREPOSITION))
-    made = corrupt_all([("go", "to", "town"), ("run", "to", "bed")], confusions)
-    assert [m.tokens for m in made] == [("go", "in", "town"), ("run", "in", "bed")]
+def test_corrupt_in_context_corrupts_each_sentence_and_its_context_once() -> None:
+    tables = table_sets([repeated(PREPOSITION)])
+    made = corrupt_in_context(
+        [(("go", "to", "town"), "We go to bed."), (("run", "to", "bed"), "")], tables
+    )
+    assert [(m.tokens, c) for m, c in made] == [
+        (("go", "in", "town"), "We go in bed."),
+        (("run", "in", "bed"), ""),
+    ]
+
+
+def test_table_sets_skip_empty_sources_and_can_fix_the_error_counts() -> None:
+    tables = table_sets([repeated(PREPOSITION), [], repeated(MISSING)], error_counts=(0, 1, 2))
+    assert [set(t.codes) for t in tables] == [{"R:PREP"}, {"M:DET"}]
+    assert [t.error_counts for t in tables] == [(0, 1, 2), (0, 1, 2)]
+    assert table_sets([repeated(MISSING)])[0].error_counts == (1, 1)
+
+
+def test_each_sentence_takes_one_of_the_table_sets() -> None:
+    tables = table_sets([repeated(PREPOSITION), repeated(MISSING)])
+    clean = ("we", "go", "to", "the", "town")
+    made = corrupt_in_context([(clean, "We went to the shop.")] * 200, tables)
+    kinds = Counter(edit.code for sentence, _ in made for edit in sentence.annotators[0])
+    assert kinds["R:PREP"] > 50
+    assert kinds["M:DET"] > 50
+    for sentence, context in made:
+        [edit] = sentence.annotators[0]
+        expected = "We went in the shop." if edit.code == "R:PREP" else "We went to shop."
+        assert context == expected
+
+
+def test_a_fixed_count_of_zero_leaves_a_sentence_clean() -> None:
+    [tables] = [table_sets([repeated(PREPOSITION)], error_counts=(0,))]
+    made = synthesize(repeated(PREPOSITION), tables, copies=3)
+    assert all(sentence.annotators == ((),) for _, sentence in made)
 
 
 def test_a_context_gets_errors_of_its_own() -> None:
@@ -120,3 +155,29 @@ def test_a_context_gets_errors_of_its_own() -> None:
 
 def test_an_empty_context_stays_empty() -> None:
     assert corrupt_context("", learn_confusions([]), random.Random(0)) == ""
+
+
+def test_corrected_copies_keep_only_sentences_with_a_known_fix() -> None:
+    real = [
+        PREPOSITION,
+        annotated("all is well"),
+        annotated("a b", GoldEdit(0, 1, ("c",), UNCORRECTABLE)),
+    ]
+    fixed = AnnotatedSentence(("we", "go", "to", "home", "now"), ((),))
+    assert corrected_copies(real, context_sentences=0) == [(fixed, ""), None, None]
+
+
+def test_a_corrected_copy_reads_after_the_corrected_text_before_it() -> None:
+    real = [PREPOSITION, MISSING]
+    [first, second] = corrected_copies(real, context_sentences=1)
+    assert first is not None and first[1] == ""
+    assert second == (
+        AnnotatedSentence(("we", "saw", "the", "cat", "there"), ((),)),
+        "we go to home now",
+    )
+
+
+def test_a_sentence_with_nothing_to_fix_is_its_own_clean_version() -> None:
+    real = [PREPOSITION, annotated("all is well")]
+    [_, unchanged] = clean_versions(real, context_sentences=1)
+    assert unchanged == (AnnotatedSentence(("all", "is", "well"), ((),)), "we go to home now")

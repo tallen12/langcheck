@@ -73,7 +73,9 @@ class TierPolicy:
     """
 
     error: float = 0.7
-    suggestion: float = 0.3
+    suggestion: float = 0.1
+    """Low on purpose: the proposer and its gate drop flags no correction improves, and
+    from 0.3 the tagger missed about 30% of real errors in edited prose."""
     comma: float = 0.5
     growth: Growth = field(default_factory=Adjacent)
 

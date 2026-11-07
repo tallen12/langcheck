@@ -57,7 +57,7 @@ def load_checkpoint(directory: Path, *, device: torch.device) -> Checkpoint:
     """The tagger saved in ``directory``, on ``device``."""
     info = CheckpointInfo.model_validate_json((directory / _INFO).read_text(encoding="utf-8"))
     config = AutoConfig.from_pretrained(directory)
-    tagger = SlotTagger(AutoModel.from_config(config))
+    tagger = SlotTagger(AutoModel.from_config(config, dtype=torch.float32))
     tagger.load_state_dict(torch.load(directory / _WEIGHTS, map_location="cpu", weights_only=True))
     tagger.to(device)
     return Checkpoint(tagger.eval(), load_tokenizer(directory), info)

@@ -44,3 +44,13 @@ def test_a_damaged_info_file_is_refused(
 
     with pytest.raises(ValidationError):
         load_checkpoint(tmp_path, device=CPU)
+
+
+def test_a_tagger_saved_in_half_precision_loads_as_float32(
+    tmp_path: Path, tiny_tokenizer: PreTrainedTokenizerFast
+) -> None:
+    save_checkpoint(tmp_path, tiny_tagger(tiny_tokenizer).half(), tiny_tokenizer, INFO)
+
+    loaded = load_checkpoint(tmp_path, device=CPU)
+
+    assert {p.dtype for p in loaded.tagger.parameters()} == {torch.float32}

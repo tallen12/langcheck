@@ -122,10 +122,32 @@ def test_judging_epochs_by_flags_logs_them_and_keeps_the_best(
     assert lines[-1] == f"keeping epoch {result.epoch}"
 
 
+def test_a_mix_of_validation_sets_is_also_reported_set_by_set(
+    tiny_tokenizer: PreTrainedTokenizerFast,
+) -> None:
+    lines: list[str] = []
+
+    train(
+        tiny_tagger(tiny_tokenizer),
+        tiny_tokenizer,
+        [InContext(WRONG), InContext(RIGHT)] * 4,
+        [InContext(WRONG, source="learner"), InContext(RIGHT, source="writers")] * 2,
+        device=CPU,
+        options=TrainingOptions(epochs=1, batch_size=4, choice=ByFlags(TierPolicy())),
+        log=lines.append,
+    )
+
+    flagged = [line for line in lines if "edits inside a flag" in line]
+    assert len(flagged) == 3
+    assert flagged[1].endswith(" on learner")
+    assert flagged[2].endswith(" on writers")
+    assert "0/0 edits inside" in flagged[2]
+
+
 def test_flag_line_shows_precision_reach_and_f05() -> None:
     line = flag_line(2, TierPolicy(), FlagReach(flags=10, right=8, edits=12, reached=9))
 
     assert line == (
-        "epoch 2: flags from 0.30, 10 flags, precision 0.800, 9/12 edits inside a flag "
+        "epoch 2: flags from 0.10, 10 flags, precision 0.800, 9/12 edits inside a flag "
         "(reach 0.750), F0.5 0.7895"
     )

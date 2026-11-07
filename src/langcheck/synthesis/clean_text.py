@@ -16,8 +16,32 @@ from langcheck.tagging.document import read_sentences
 MIN_WORDS: Final = 5
 MAX_WORDS: Final = 60
 SENTENCE_ENDS: Final = frozenset(".?!")
-MARKUP: Final = frozenset("()[]{}<>|=_*#\\~^")
-"""Parentheses too: this text has transcripts' ``((Name))`` and empty ``( )`` from links."""
+MARKUP: Final = frozenset("[]{}<>|=_*#\\~^")
+OPEN: Final = "("
+CLOSE: Final = ")"
+
+
+def plain_parentheses(text: str) -> bool:
+    """Whether ``text``'s parentheses are single, balanced and enclose something.
+
+    Transcripts' ``((Name))`` and the empty ``( )`` links leave behind are markup; a
+    parenthetical such as ``(born 1951)`` is prose, and dropping every sentence with one
+    taught the tagger that parentheses are always a mistake.
+    """
+    depth = 0
+    inside = ""
+    for char in text:
+        if char == OPEN:
+            if depth:
+                return False
+            depth, inside = 1, ""
+        elif char == CLOSE:
+            if not depth or not inside.strip():
+                return False
+            depth = 0
+        elif depth:
+            inside += char
+    return not depth
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +59,7 @@ def looks_finished(words: Sequence[str], text: str) -> bool:
         and text[0].isupper()
         and text[-1] in SENTENCE_ENDS
         and not MARKUP.intersection(text)
+        and plain_parentheses(text)
     )
 
 

@@ -2,17 +2,17 @@
 
 import asyncio
 import json
-import random
 import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Protocol
+from typing import TYPE_CHECKING, Annotated, Protocol, assert_never
 
 from cyclopts import App, Parameter
 
 from langcheck.cli.environment import CliEnvironment
+from langcheck.cli.tagging import read_pair_file
 from langcheck.correction.measure import CorrectionReport, Strategy
 from langcheck.evaluation.datasets import Dataset, dataset_files
 from langcheck.evaluation.examples import Example, load_examples
@@ -32,10 +32,12 @@ from langcheck.proposal.protocols import ProposalSource
 from langcheck.proposal.targets import training_targets
 from langcheck.synthesis.clean_text import clean_sentences, read_texts
 from langcheck.synthesis.corruption import (
-    corrupt_all,
-    corrupt_context,
-    learn_confusions,
+    clean_versions,
+    corrected_copies,
+    corrupt_in_context,
+    known_clean,
     synthesize,
+    table_sets,
 )
 from langcheck.tagging.protocols import SentenceReader
 from langcheck.tagging.tiers import Adjacent, Falloff, Growth, TierPolicy
@@ -56,6 +58,8 @@ USER_POLICY = TierPolicy()
 SCORED_SET = Dataset.BEA19_DEV
 SCORED_SENTENCES = 500
 SCORED_BATCH = 64
+DEFAULT_LEARNING_RATE = 3e-4
+"""As ``ProposerOptions`` has it, kept here so the command needs no PyTorch."""
 """Texts corrected together when scoring an epoch."""
 """The first 500 BEA-2019 dev sentences are what earlier proposers were compared on."""
 
@@ -87,6 +91,9 @@ class EpochScoring:
     epoch kept: the one whose proposals, before reranking or filtering, put a right answer
     highest (MRR). Training targets the right answer first; the filters come afterwards."""
     measured: Measured = Measured.PIPELINE
+    extra: tuple[tuple[str, tuple[tuple[AnnotatedSentence, str], ...]], ...] = ()
+    """More sets, by name, with each sentence's context: their unfiltered proposals are
+    scored too, and with any the epoch is chosen by the MRR of all sets' spans together."""
 
 
 def unfiltered_line(epoch: int, tiers: TierPolicy, row: RecallRow) -> str:
@@ -114,6 +121,21 @@ def epoch_score_line(epoch: int, tiers: TierPolicy, report: CorrectionReport) ->
     )
 
 
+@dataclass(frozen=True, slots=True)
+class Fresh:
+    """Start a new proposer."""
+
+
+@dataclass(frozen=True, slots=True)
+class FromProposer:
+    """Start from a saved proposer, such as one trained on synthetic errors first."""
+
+    path: Path
+
+
+type ProposerStart = Fresh | FromProposer
+
+
 class ProposerRuntime(Protocol):
     """Training and loading, which need PyTorch, kept away from the commands."""
 
@@ -123,9 +145,16 @@ class ProposerRuntime(Protocol):
         *,
         tagger: Path,
         output: Path,
+        start: ProposerStart,
         epochs: int,
+        learning_rate: float,
+        real: bool,
         synthetic: int,
+        corrected: bool,
         clean: Sequence[str],
+        pairs: Sequence[tuple[AnnotatedSentence, str]],
+        tables: Sequence[AnnotatedSentence],
+        errors: Sequence[int],
         false_alarms: TierPolicy,
         scoring: EpochScoring | None,
         device: str,
@@ -207,10 +236,28 @@ def _epoch_scorer(
     # The tagger is frozen, so it reads the sentences once for every epoch.
     readings = reader.read([s.tokens for s in scoring.sentences], contexts=contexts)
 
+    extra = [
+        (
+            name,
+            [sentence for sentence, _ in found],
+            [context for _, context in found],
+            reader.read(
+                [sentence.tokens for sentence, _ in found],
+                contexts=[context for _, context in found],
+            ),
+        )
+        for name, found in scoring.extra
+    ]
+
     def score(epoch: int) -> float:
         cases = raw_cases(scoring.sentences, flagged_spans(first), readings, contexts, source)
         unfiltered = recall_row("proposer", cases)
         log(unfiltered_line(epoch, first, unfiltered))
+        together = list(cases)
+        for name, sentences, more_contexts, more_readings in extra:
+            more = raw_cases(sentences, flagged_spans(first), more_readings, more_contexts, source)
+            log(f"{unfiltered_line(epoch, first, recall_row('proposer', more))} on {name}")
+            together += more
         for tiers, pipeline in pipelines:
             # One batch at a time: the reader and the proposer share the model, unlocked.
             found = asyncio.run(
@@ -218,7 +265,11 @@ def _epoch_scorer(
             )
             report = measure(scoring.examples, found, scoring.annotator, dataset=scoring.dataset)
             log(epoch_score_line(epoch, tiers, report))
-        return unfiltered.mrr
+        if not extra:
+            return unfiltered.mrr
+        combined = recall_row("proposer", together)
+        log(f"{unfiltered_line(epoch, first, combined)} on all sets")
+        return combined.mrr
 
     return score
 
@@ -232,9 +283,16 @@ class TransformerProposerRuntime:
         *,
         tagger: Path,
         output: Path,
+        start: ProposerStart,
         epochs: int,
+        learning_rate: float,
+        real: bool,
         synthetic: int,
+        corrected: bool,
         clean: Sequence[str],
+        pairs: Sequence[tuple[AnnotatedSentence, str]],
+        tables: Sequence[AnnotatedSentence],
+        errors: Sequence[int],
         false_alarms: TierPolicy,
         scoring: EpochScoring | None,
         device: str,
@@ -248,6 +306,7 @@ class TransformerProposerRuntime:
 
         from langcheck.proposal.checkpoint import (
             ProposerInfo,
+            load_proposer,
             save_proposer,
             shape_for,
         )
@@ -285,25 +344,61 @@ class TransformerProposerRuntime:
                 for sentence, context, reading in zip(found, read, readings, strict=True)
             ]
 
-        real = list(zip(sentences, contexts, strict=True))
-        kept, held = split_holdout(real)
-        training = items_of([s for s, _ in kept], [c for _, c in kept])
-        validation = items_of([s for s, _ in held], [c for _, c in held])
+        pairs = list(zip(sentences, contexts, strict=True))
+        kept, held = split_holdout(pairs)
+        n_context = loaded.info.context_sentences
+
+        def flagged(found: Sequence[tuple[AnnotatedSentence, str] | None]) -> list[ProposerItem]:
+            known = [pair for pair in found if pair is not None]
+            return items_of([s for s, _ in known], [c for _, c in known])
+
+        training = flagged(kept) if real else []
+        validation = flagged(held)
+        if corrected and real:
+            fixed, _ = split_holdout(corrected_copies(sentences, context_sentences=n_context))
+            training += flagged(fixed)
+        corruption = table_sets([[s for s, _ in kept], tables], error_counts=errors)
         if synthetic:
-            made = synthesize([s for s, _ in kept], copies=synthetic)
+            made = synthesize([s for s, _ in kept], corruption, copies=synthetic)
             training += items_of([s for _, s in made], [kept[i][1] for i, _ in made])
+            if corrected and not real:
+                versions, _ = split_holdout(clean_versions(sentences, context_sentences=n_context))
+                training += flagged([versions[i] for i in sorted({i for i, _ in made})])
         if clean:
-            found = list(clean_sentences(clean, context_sentences=loaded.info.context_sentences))
-            confusions = learn_confusions([s for s, _ in kept])
-            rng = random.Random(0)
-            training += items_of(
-                corrupt_all([c.words for c in found], confusions),
-                [corrupt_context(c.context, confusions, rng) for c in found],
+            found = list(clean_sentences(clean, context_sentences=n_context))
+            training += flagged(
+                corrupt_in_context([(c.words, c.context) for c in found], corruption)
             )
+            if corrected:
+                training += flagged([(AnnotatedSentence(c.words, ((),)), c.context) for c in found])
+        if pairs:
+            training += flagged(pairs)
+            if corrected:
+                training += flagged(
+                    [
+                        (AnnotatedSentence(fixed, ((),)), context)
+                        for sentence, context in pairs
+                        if (fixed := known_clean(sentence)) is not None
+                    ]
+                )
         cases = sum(len(item.targets) for item in training)
         log(f"{len(training)} training sentences, {cases} targets")
         shape = shape_for(loaded.tagger)
-        proposer = TokenProposer(shape).to(target)
+        match start:
+            case Fresh():
+                proposer = TokenProposer(shape).to(target)
+            case FromProposer(path=path):
+                proposer, info = load_proposer(path, device=target)
+                if (info.encoder_size, info.embedding_size, info.vocab_size) != (
+                    shape.encoder_size,
+                    shape.embedding_size,
+                    shape.vocab_size,
+                ):
+                    msg = f"the proposer at {path} reads another kind of tagger than {tagger}"
+                    raise ValueError(msg)
+                log(f"continuing from {path} (epoch {info.epoch})")
+            case _:
+                assert_never(start)
         output.parent.mkdir(parents=True, exist_ok=True)
         # Beside the output rather than in the temp folder, which may be RAM-backed.
         with tempfile.TemporaryDirectory(
@@ -316,7 +411,7 @@ class TransformerProposerRuntime:
                 training,
                 validation,
                 device=target,
-                options=ProposerOptions(epochs=epochs),
+                options=ProposerOptions(epochs=epochs, learning_rate=learning_rate),
                 log=log,
                 store=MappedFileStore(Path(states)),
                 choice=(
@@ -401,11 +496,53 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
         *,
         tagger: Annotated[Path, Parameter(help="The tagger checkpoint to read with.")],
         epochs: int = 3,
+        start_from: Annotated[
+            Path | None,
+            Parameter(help="Continue a saved proposer, such as one trained on synthetic errors."),
+        ] = None,
+        learning_rate: float = DEFAULT_LEARNING_RATE,
+        real: Annotated[
+            bool,
+            Parameter(
+                help="Train on the real learner sentences; --no-real trains on --synthetic "
+                "and --clean ones alone, still validated on real ones."
+            ),
+        ] = True,
+        corrected: Annotated[
+            bool,
+            Parameter(
+                help="Also train on the clean version of each wrong or corrupted training "
+                "sentence, where the tagger's false alarms should be left alone."
+            ),
+        ] = False,
         synthetic: Annotated[
             int, Parameter(help="Corrupted copies of each corrected training sentence to add.")
         ] = 0,
         clean: Annotated[
             Path | None, Parameter(help="JSONL of edited prose to corrupt and add, one per text.")
+        ] = None,
+        pairs: Annotated[
+            list[Path] | None,
+            Parameter(
+                help="Sentences with their edits to add, as M2 (read without context) or "
+                "JSONL with context; repeatable."
+            ),
+        ] = None,
+        tables: Annotated[
+            list[Path] | None,
+            Parameter(
+                help="Pairs (M2 or JSONL) to learn a second set of error tables from; each "
+                "--synthetic or --clean sentence takes the learner set or this one at random. "
+                "Repeatable."
+            ),
+        ] = None,
+        errors: Annotated[
+            list[int] | None,
+            Parameter(
+                help="Error counts to draw each --synthetic or --clean sentence's from, such "
+                "as 0 1 2 3 for a quarter each; default as the tables' source shows.",
+                consume_multiple=True,
+            ),
         ] = None,
         limit: Annotated[int | None, Parameter(help="Only the first N sentences.")] = None,
         scored: Annotated[
@@ -433,6 +570,13 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
         measured: Annotated[
             Measured, Parameter(help="Score only the raw proposals, or the pipeline as well.")
         ] = Measured.PIPELINE,
+        score_on: Annotated[
+            list[Path] | None,
+            Parameter(
+                help="Pairs (M2 or JSONL), such as a held-out set, whose raw proposals are all "
+                "scored after each epoch too; the epoch is then chosen on all sets. Repeatable."
+            ),
+        ] = None,
         device: str = "cuda",
         data: Annotated[Path | None, Parameter(help="Default data/eval.")] = None,
     ) -> int:
@@ -442,6 +586,15 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
         growth: Growth = Adjacent() if join is None else Falloff(join=join, rate=rate)
 
         def run() -> int:
+            if not real and not synthetic and clean is None and pairs is None:
+                env.err(
+                    "langcheck: without the real sentences, train on --synthetic, --clean "
+                    "or --pairs"
+                )
+                return FAILED
+            if any(count < 0 for count in errors or ()):
+                env.err("langcheck: --errors takes counts of 0 or more")
+                return FAILED
             sentences: list[AnnotatedSentence] = []
             for dataset in TRAINING_SETS:
                 found = read_set(dataset, data)
@@ -468,14 +621,25 @@ def proposer_app(env: CliEnvironment, *, runtime: ProposerRuntime, guarded: Guar
                         for at in suggestion
                     ),
                     measured,
+                    tuple((path.stem, tuple(read_pair_file(path))) for path in score_on or ()),
                 )
+            elif score_on is not None:
+                env.err("langcheck: --score-on needs --scored above 0")
+                return FAILED
             runtime.train(
                 sentences[:limit],
                 tagger=tagger,
                 output=output,
+                start=Fresh() if start_from is None else FromProposer(start_from),
                 epochs=epochs,
+                learning_rate=learning_rate,
+                real=real,
                 synthetic=synthetic,
+                corrected=corrected,
                 clean=read_texts(clean) if clean is not None else (),
+                pairs=[pair for path in pairs or () for pair in read_pair_file(path)],
+                tables=[s for path in tables or () for s, _ in read_pair_file(path)],
+                errors=errors or (),
                 false_alarms=TierPolicy(
                     error=max(USER_POLICY.error, false_alarms),
                     suggestion=false_alarms,

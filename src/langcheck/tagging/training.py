@@ -37,6 +37,7 @@ class TrainingOptions:
     epochs: int = 3
     batch_size: int = 16
     learning_rate: float = 2e-5
+    error_weight: float = 1.0
     weight_decay: float = 0.01
     warmup_share: float = 0.1
     max_grad_norm: float = 1.0
@@ -59,10 +60,13 @@ class TrainingResult:
 
 @dataclass(frozen=True, slots=True)
 class InContext:
-    """A sentence and the text before it, read but never scored."""
+    """A sentence and the text before it, read but never scored. ``source`` names the set
+    a validation sentence came from, so a mix of sets can be reported set by set.
+    """
 
     sentence: AnnotatedSentence
     context: str = ""
+    source: str = ""
 
 
 def split_holdout[T](sentences: Sequence[T]) -> tuple[list[T], list[T]]:
@@ -161,7 +165,7 @@ def train(
                 device,
             )
             word_logits, gap_logits = tagger(batch)
-            loss = slot_loss(batch, word_logits, gap_logits)
+            loss = slot_loss(batch, word_logits, gap_logits, error_weight=options.error_weight)
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(tagger.parameters(), options.max_grad_norm)
@@ -182,6 +186,11 @@ def train(
             case ByFlags(policy=policy):
                 flags = flag_reach([item.sentence for item in validation], scores, policy)
                 log(flag_line(epoch, policy, flags))
+                for source, part in _by_source(validation, scores):
+                    found_part = flag_reach(
+                        [item.sentence for item, _ in part], [s for _, s in part], policy
+                    )
+                    log(f"{flag_line(epoch, policy, found_part)} on {source}")
                 found = TrainingResult(epoch, point, flags)
                 rating = flags.f05
             case _:
@@ -195,6 +204,16 @@ def train(
     tagger.load_state_dict(best_state)
     log(f"keeping epoch {best.epoch}")
     return best
+
+
+def _by_source(
+    items: Sequence[InContext], scores: Sequence[SlotScores]
+) -> list[tuple[str, list[tuple[InContext, SlotScores]]]]:
+    """Each source's sentences with their scores, when there is more than one source."""
+    parts: dict[str, list[tuple[InContext, SlotScores]]] = {}
+    for item, score in zip(items, scores, strict=True):
+        parts.setdefault(item.source, []).append((item, score))
+    return list(parts.items()) if len(parts) > 1 else []
 
 
 def flag_line(epoch: int, policy: TierPolicy, flags: FlagReach) -> str:

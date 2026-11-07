@@ -13,7 +13,7 @@ SCORES = SlotScores((0.0, 0.9, 0.2, 0.25, 0.0), (0.0,) * 6)
 
 
 def test_reach_counts_edits_wholly_inside_a_flag_and_precision_flags_touching_one() -> None:
-    plain = flag_reach([SENTENCE], [SCORES], TierPolicy())
+    plain = flag_reach([SENTENCE], [SCORES], TierPolicy(suggestion=0.3))
     grown = flag_reach([SENTENCE], [SCORES], TierPolicy(growth=Falloff(join=0.1)))
 
     assert (plain.flags, plain.right, plain.edits, plain.reached) == (1, 1, 2, 1)
@@ -24,7 +24,7 @@ def test_a_flag_on_a_clean_sentence_is_wrong_and_uncorrectable_edits_are_not_rea
     clean = AnnotatedSentence(WORDS, ((),))
     vague = AnnotatedSentence(WORDS, ((GoldEdit(0, 5, (), "UNK"),),))
 
-    found = flag_reach([clean, vague], [SCORES, SCORES], TierPolicy())
+    found = flag_reach([clean, vague], [SCORES, SCORES], TierPolicy(suggestion=0.3))
 
     assert (found.flags, found.right, found.edits, found.reached) == (2, 1, 0, 0)
 
