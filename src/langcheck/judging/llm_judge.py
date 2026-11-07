@@ -8,8 +8,9 @@ Judging a sentence in one request costs one call instead of one per edit.
 """
 
 import string
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from langcheck.judging.models import (
     Candidate,
@@ -35,6 +36,14 @@ THINK_SUFFIX = "+think"
 TIE = "tie"
 NONE = "none"
 LETTERS = string.ascii_uppercase
+REASON_CHARACTERS = 200
+"""Longest reason kept. The reply schema says so, and servers that constrain replies to
+the schema stop a model that repeats itself inside a reason, which once ran until the
+proxy timed out."""
+MAX_TOKENS = 1024
+"""Tokens a judge may write without reasoning; a reply in the schema needs a few hundred."""
+THINKING_TOKENS = 8192
+"""Tokens with reasoning on, which come before the reply and count toward the limit."""
 
 SYSTEM_PROMPT = """You judge corrections of English sentences written by learners and \
 by fluent writers. Each correction (A, B, ...) is one person's whole rewrite of the \
@@ -59,11 +68,19 @@ still contains a real error. Ignore style. Give each reason in one short sentenc
 with JSON only."""
 
 
+def _clipped(value: object) -> object:
+    return value[:REASON_CHARACTERS] if isinstance(value, str) else value
+
+
+type Reason = Annotated[str, BeforeValidator(_clipped), Field(max_length=REASON_CHARACTERS)]
+"""One short sentence; a longer one from a server that ignores the schema is cut."""
+
+
 class _EditReply(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     edit: int = Field(ge=1)
-    reason: str
+    reason: Reason
     verdict: Verdict
     linked: tuple[int, ...] = ()
 
@@ -76,9 +93,9 @@ class JudgeReply(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     edits: tuple[_EditReply, ...]
-    preferred_reason: str
+    preferred_reason: Reason
     preferred: str
-    remaining_reason: str
+    remaining_reason: Reason
     remaining_error: bool
 
 
@@ -89,7 +106,11 @@ class LLMEditJudge:
         self._llm = llm
         self._model = model
         self._think = think
-        self._options = ChatOptions(think=think, schema_name="judgment")
+        self._options = ChatOptions(
+            think=think,
+            schema_name="judgment",
+            max_tokens=THINKING_TOKENS if think else MAX_TOKENS,
+        )
 
     @property
     def name(self) -> str:

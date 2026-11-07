@@ -4,6 +4,9 @@ import json
 from langcheck.evaluation.models import ScoredEdit
 from langcheck.judging.llm_judge import (
     JUDGE_PROMPT_VERSION,
+    MAX_TOKENS,
+    REASON_CHARACTERS,
+    THINKING_TOKENS,
     LLMEditJudge,
     describe_edit,
     judge_messages,
@@ -160,6 +163,21 @@ def test_a_reply_that_misnumbers_edits_or_names_no_correction_is_not_judged() ->
     assert "expected verdicts on edits 1 to 4" in first.reason
     assert isinstance(second, NotJudged)
     assert "preferred 'C' is not one of AB" in second.reason
+
+
+def test_reasons_are_capped_in_the_schema_and_requests_have_a_token_limit() -> None:
+    long = "x" * (REASON_CHARACTERS + 50)
+    llm = ScriptedLLM([reply(*[(n, "valid") for n in range(1, 5)]).replace("because", long)])
+
+    result = asyncio.run(LLMEditJudge(llm, "m").judge(ITEM))
+    asyncio.run(LLMEditJudge(llm, "m", think=True).judge(ITEM))
+
+    assert isinstance(result, Judged)
+    assert result.verdicts[0].reason == "x" * REASON_CHARACTERS
+    schema = llm.options[0].json_schema
+    assert schema is not None
+    assert '"maxLength": 200' in json.dumps(schema)
+    assert [options.max_tokens for options in llm.options] == [MAX_TOKENS, THINKING_TOKENS]
 
 
 def test_a_server_failure_is_not_judged() -> None:
