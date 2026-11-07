@@ -12,6 +12,7 @@ from langcheck.correction.models import (
 from langcheck.correction.pipeline import CorrectionPipeline
 from langcheck.proposal.corrector import ProposerCorrector, proposer_policy, word_span
 from langcheck.proposal.protocols import Proposal, ProposalRequest
+from langcheck.proposal.rerank import Scored
 from langcheck.proposal.targets import WordSpan
 from langcheck.tagging.alignment import CharSpan
 from langcheck.tagging.document import SentenceInText
@@ -88,6 +89,26 @@ def test_the_tagger_reorders_and_a_keep_is_dropped() -> None:
     assert [c.replacement for c in pending.candidates] == ["goes"]
     assert [r.reason.value for r in pending.rejected] == ["no_change"]
     assert set(reader.contexts) == {"Before."}
+
+
+class Observer:
+    def __init__(self) -> None:
+        self.seen: list[tuple[TextFlag, list[str], list[str]]] = []
+
+    def reranked(
+        self, flag: TextFlag, proposals: Sequence[Scored], ordered: Sequence[Scored]
+    ) -> None:
+        self.seen.append((flag, [p.text for p in proposals], [p.text for p in ordered]))
+
+
+def test_an_observer_sees_each_flags_proposals_before_and_after_reranking() -> None:
+    source = Source(Proposal("", -0.1, keep=True), Proposal("go", -0.5), Proposal("goes", -2.0))
+    observer = Observer()
+    item = flagged(13, 15)
+
+    asyncio.run(ProposerCorrector(source, Reader(), POLICY, observer=observer).correct([item]))
+
+    assert observer.seen == [(item.flags[0], ["go", "goes"], ["goes", "go"])]
 
 
 def test_no_sentences_read_nothing() -> None:

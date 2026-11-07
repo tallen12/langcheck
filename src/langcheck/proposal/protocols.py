@@ -4,7 +4,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from langcheck.proposal.rerank import Scored
 from langcheck.proposal.targets import WordSpan
+from langcheck.tagging.tiers import TextFlag
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,4 +32,16 @@ class ProposalSource(Protocol):
 
     def propose(self, requests: Sequence[ProposalRequest]) -> list[list[tuple[Proposal, ...]]]:
         """For each request, proposals for each of its spans, best first. Blocking."""
+        ...
+
+
+class RerankObserver(Protocol):
+    """Sees each flag's proposals as the tagger scored them and after reranking, to trace
+    why a correction was or was not offered.
+    """
+
+    def reranked(
+        self, flag: TextFlag, proposals: Sequence[Scored], ordered: Sequence[Scored]
+    ) -> None:
+        """``proposals`` in the proposer's order and ``ordered`` best first, for ``flag``."""
         ...
