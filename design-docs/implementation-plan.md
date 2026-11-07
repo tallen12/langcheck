@@ -651,6 +651,56 @@ distilroberta-base):
 - Validation rejected 63 of the LLM's issues on CoNLL-2014 (200 sentences) and 357 on
   BEA-2019 (1,000 sentences), mostly as too large or as no change.
 
+### Realistic evaluation
+
+Scoring against gold edits is unreliable on the sets that look most like this checker's
+users. OmniGEC and WikEd gold mixes style edits with error fixes and leaves errors
+uncorrected, and CWEB's two annotators often disagree. Style edits in gold lower recall,
+and uncorrected errors turn right fixes into false positives, so precision (what matters
+most for experienced writers) reads low and tuning chases the wrong errors. Training on
+synthetic errors alone risks fitting the noise model, so evaluation needs real errors
+from outside that distribution.
+
+The plan judges edits instead of trusting gold alone. It is built on `feat/realistic-eval`
+in this order: steps 2 to 5 depend on each other, 6 and 7 stand alone, 8 needs 1 and 3.
+
+1. **Baseline under the new rules.** Retrain the tagger and proposer on corrupted clean
+   prose (built-in tables, noise-model pairs, `--tables`) and record raw ERRANT scores on
+   CWEB-G and CWEB-S dev, JFLEG dev, CoNLL-2014, the odd half of the OmniGEC holdout and
+   WikEd. Every later number is compared with this one.
+2. **Judgment store.** Each unique edit, keyed by its sentence and the span and words it
+   writes, is judged once as *valid* (fixes an error), *neutral* (acceptable but not
+   needed, such as style) or *wrong*, with who judged it (an LLM by model and prompt
+   version, or a person) and a short reason. Gold edits are judged the same way, so
+   style-only gold can leave the recall denominator. Judgments are pooled across every
+   system and run on a set, so a new run only needs its new edits judged. The store is
+   JSONL under `data/judgments/<set>/`, never committed: CWEB's ShareAlike licence covers
+   anything derived from it.
+3. **LLM judge.** An `EditJudge` protocol with an adapter on the OpenAI-compatible client.
+   The judge sees the sentence, its context and one edit, and answers in a schema. It
+   must be a different model family from the corrector being measured, or the LLM
+   corrector is favoured over the local proposer. It judges only edits the store lacks.
+4. **Adjusted scores.** Reports keep raw ERRANT F0.5 and add judged scores: precision is
+   gold matches plus edits judged valid, over all edits except neutral ones; recall is
+   over gold edits judged valid. Reports show how many edits are judged, and judged
+   scores are not given below full coverage.
+5. **Human audit.** Export the judge's disagreements with gold and a random sample of
+   its verdicts for review; imported human verdicts override the judge's. Reports give
+   the judge's agreement with people, which says how far to trust step 4.
+6. **False alarms on clean prose.** Flags per 1,000 words on held-out edited prose that
+   was not trained on. Nearly every flag there is wrong; the judge triages a sample for
+   the true rate. It needs no gold and is the closest measure of what an experienced
+   writer sees.
+7. **Cross-noise gap.** Score on held-out prose corrupted by a generator the model was
+   not trained with (the noise model when trained on built-in tables, and the reverse),
+   against the same prose corrupted by its own training noise. A large gap means the
+   model fits its noise rather than errors.
+8. **Gate refit.** Fit `AbstainGate` from judged corrections on pairs that are not an
+   evaluation set, replacing the weights fitted partly on `bea19-dev`. The PLL filters
+   tuned on BEA-2019 dev are retuned the same way.
+9. **Locked test splits.** CWEB test sets only produce reported numbers. Tuning, epoch
+   choice and gate fitting use dev sets or files passed in, never a test split.
+
 ## Features
 
 Each milestone is built as one or more features (see the `git-workflow` skill): one
@@ -670,12 +720,18 @@ depend on each other.
 | `feat/vscode` | M4 | Editor client. | LSP proxy (`langcheck lsp`); TypeScript extension in `editors/vscode/`, `just vscode` and its CI job |
 | `feat/libreoffice` | M5 | LibreOffice client. | Spike; UNO proofreader; import-rule check; `just libreoffice` and its CI job |
 | `feat/evaluation` | M6 | Measuring and tuning. | `evaluate` command with ERRANT scoring; `ScoringPolicy` tuning; model and prompt comparison |
+| `feat/realistic-eval` | M6 | Evaluation not bound to noisy gold. | CWEB and evaluation-only sets (done); baseline; judgment store; LLM judge; judged scores; human audit; false alarms on clean prose; cross-noise gap; gate refit |
 
 A feature that grows past the limit while being built is split at a task boundary into a
 second feature that lands after it.
 
 ## Open questions
 
+- **Which model judges edits.** The judge in *Realistic evaluation* must not share a
+  family with the corrector it measures; a stronger hosted model is likely needed. Cost
+  and which model are undecided.
+- **How much human review.** The audit's size sets how far judged scores can be trusted;
+  a few hundred verdicts per set is the working guess.
 - **Default LLM model.** Any OpenAI-compatible server works; which model to recommend is
   decided by M6 on accuracy and latency (live editing needs about 1–3 s per chunk). Only
   qwen3:8b has been evaluated so far: F0.5 0.24–0.31 at p50 1.8 s per chunk.
